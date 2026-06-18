@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { idArraySchema, idSchema } from "@/lib/ids";
 
 const trimmedString = z.string().trim();
 
@@ -9,19 +10,11 @@ function emptyToUndefined(value: unknown) {
   return value;
 }
 
-const roleIdsSchema = z
-  .preprocess((value) => (value == null ? [] : value), z.array(z.string().uuid()))
-  .default([]);
-
-const permissionIdsSchema = z
-  .preprocess((value) => (value == null ? [] : value), z.array(z.string().uuid()))
-  .default([]);
-
 export const createUserSchema = z.object({
   username: trimmedString.min(2, "Username must be at least 2 characters").max(100),
   email: trimmedString.email("Invalid email address").max(255),
   password: z.string().min(8, "Password must be at least 8 characters").max(128),
-  roleIds: roleIdsSchema,
+  roleIds: idArraySchema,
 });
 
 export const updateUserSchema = z.object({
@@ -32,7 +25,7 @@ export const updateUserSchema = z.object({
     z.string().min(8, "Password must be at least 8 characters").max(128).optional(),
   ),
   accountStatus: z.enum(["ACTIVE", "LOCKED", "DISABLED", "EXPIRED"]).optional(),
-  roleIds: roleIdsSchema.optional(),
+  roleIds: idArraySchema.optional(),
 });
 
 export const createRoleSchema = z.object({
@@ -41,18 +34,18 @@ export const createRoleSchema = z.object({
     emptyToUndefined,
     trimmedString.max(500).optional(),
   ),
-  permissionIds: permissionIdsSchema,
+  permissionIds: idArraySchema,
 });
 
 export const updateRoleSchema = z.object({
   name: trimmedString.min(2, "Role name must be at least 2 characters").max(100).optional(),
   description: z.preprocess(emptyToUndefined, trimmedString.max(500).nullable().optional()),
-  permissionIds: permissionIdsSchema.optional(),
+  permissionIds: idArraySchema.optional(),
 });
 
 export const createPermissionSchema = z.object({
-  resourceId: z.string().uuid("Select a valid resource"),
-  actionId: z.string().uuid("Select a valid action"),
+  resourceId: idSchema,
+  actionId: idSchema,
   description: z.preprocess(
     emptyToUndefined,
     trimmedString.max(500).optional(),
@@ -60,8 +53,8 @@ export const createPermissionSchema = z.object({
 });
 
 export const updatePermissionSchema = z.object({
-  resourceId: z.string().uuid("Select a valid resource").optional(),
-  actionId: z.string().uuid("Select a valid action").optional(),
+  resourceId: idSchema.optional(),
+  actionId: idSchema.optional(),
   description: z.preprocess(emptyToUndefined, trimmedString.max(500).nullable().optional()),
 });
 

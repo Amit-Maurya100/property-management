@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { parseId, type IdInput } from "@/lib/ids";
 
 const PROTECTED_ROLES = new Set(["super_admin"]);
 
@@ -20,9 +21,9 @@ const roleSelect = {
 
 type RoleClient = Pick<typeof prisma, "role">;
 
-async function fetchRole(client: RoleClient, id: string) {
+async function fetchRole(client: RoleClient, id: IdInput) {
   const role = await client.role.findUnique({
-    where: { id },
+    where: { id: parseId(id) },
     select: roleSelect,
   });
   if (!role) {
@@ -38,14 +39,14 @@ export async function listRoles() {
   });
 }
 
-export async function getRole(id: string) {
+export async function getRole(id: IdInput) {
   return fetchRole(prisma, id);
 }
 
 export async function createRole(data: {
   name: string;
   description?: string;
-  permissionIds?: string[];
+  permissionIds?: bigint[];
 }) {
   const existing = await prisma.role.findUnique({ where: { name: data.name } });
   if (existing) {
@@ -75,14 +76,15 @@ export async function createRole(data: {
 }
 
 export async function updateRole(
-  id: string,
+  id: IdInput,
   data: {
     name?: string;
     description?: string | null;
-    permissionIds?: string[];
+    permissionIds?: bigint[];
   },
 ) {
-  const role = await getRole(id);
+  const roleId = parseId(id);
+  const role = await getRole(roleId);
 
   if (PROTECTED_ROLES.has(role.name) && data.name && data.name !== role.name) {
     throw new Error("BAD_REQUEST:Cannot rename protected system role");
@@ -90,7 +92,7 @@ export async function updateRole(
 
   if (data.name) {
     const conflict = await prisma.role.findFirst({
-      where: { name: data.name, id: { not: id } },
+      where: { name: data.name, id: { not: roleId } },
     });
     if (conflict) {
       throw new Error("CONFLICT:Role with this name already exists");
@@ -99,7 +101,7 @@ export async function updateRole(
 
   return prisma.$transaction(async (tx) => {
     await tx.role.update({
-      where: { id },
+      where: { id: roleId },
       data: {
         ...(data.name ? { name: data.name } : {}),
         ...(data.description !== undefined ? { description: data.description } : {}),
@@ -107,28 +109,29 @@ export async function updateRole(
     });
 
     if (data.permissionIds) {
-      await tx.rolePermission.deleteMany({ where: { roleId: id } });
+      await tx.rolePermission.deleteMany({ where: { roleId } });
       if (data.permissionIds.length > 0) {
         await tx.rolePermission.createMany({
           data: data.permissionIds.map((permissionId) => ({
-            roleId: id,
+            roleId,
             permissionId,
           })),
         });
       }
     }
 
-    return fetchRole(tx, id);
+    return fetchRole(tx, roleId);
   });
 }
 
-export async function deleteRole(id: string) {
-  const role = await getRole(id);
+export async function deleteRole(id: IdInput) {
+  const roleId = parseId(id);
+  const role = await getRole(roleId);
   if (PROTECTED_ROLES.has(role.name)) {
     throw new Error("BAD_REQUEST:Cannot delete protected system role");
   }
   if (role._count.userRoles > 0) {
     throw new Error("BAD_REQUEST:Cannot delete role assigned to users");
   }
-  await prisma.role.delete({ where: { id } });
+  await prisma.role.delete({ where: { id: roleId } });
 }

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { parseId, type IdInput } from "@/lib/ids";
 import { hashPassword } from "@/lib/security/login";
 
 const userPublicSelect = {
@@ -22,9 +23,9 @@ const userPublicSelect = {
 
 type UserClient = Pick<typeof prisma, "user">;
 
-async function fetchUser(client: UserClient, id: string) {
+async function fetchUser(client: UserClient, id: IdInput) {
   const user = await client.user.findUnique({
-    where: { id },
+    where: { id: parseId(id) },
     select: userPublicSelect,
   });
   if (!user) {
@@ -40,7 +41,7 @@ export async function listUsers() {
   });
 }
 
-export async function getUser(id: string) {
+export async function getUser(id: IdInput) {
   return fetchUser(prisma, id);
 }
 
@@ -49,9 +50,9 @@ export async function createUser(
     username: string;
     email: string;
     password: string;
-    roleIds?: string[];
+    roleIds?: bigint[];
   },
-  grantedById: string,
+  grantedById: IdInput,
 ) {
   const existing = await prisma.user.findFirst({
     where: { OR: [{ email: data.email }, { username: data.username }] },
@@ -76,7 +77,7 @@ export async function createUser(
         data: data.roleIds.map((roleId) => ({
           userId: user.id,
           roleId,
-          grantedBy: grantedById,
+          grantedBy: parseId(grantedById),
           isActive: true,
         })),
         skipDuplicates: true,
@@ -88,22 +89,23 @@ export async function createUser(
 }
 
 export async function updateUser(
-  id: string,
+  id: IdInput,
   data: {
     username?: string;
     email?: string;
     password?: string;
     accountStatus?: "ACTIVE" | "LOCKED" | "DISABLED" | "EXPIRED";
-    roleIds?: string[];
+    roleIds?: bigint[];
   },
-  grantedById: string,
+  grantedById: IdInput,
 ) {
-  await getUser(id);
+  const userId = parseId(id);
+  await getUser(userId);
 
   if (data.email || data.username) {
     const conflict = await prisma.user.findFirst({
       where: {
-        id: { not: id },
+        id: { not: userId },
         OR: [
           ...(data.email ? [{ email: data.email }] : []),
           ...(data.username ? [{ username: data.username }] : []),
@@ -139,31 +141,33 @@ export async function updateUser(
 
   return prisma.$transaction(async (tx) => {
     if (Object.keys(updateData).length > 0) {
-      await tx.user.update({ where: { id }, data: updateData });
+      await tx.user.update({ where: { id: userId }, data: updateData });
     }
 
     if (data.roleIds) {
-      await tx.userRole.deleteMany({ where: { userId: id } });
+      await tx.userRole.deleteMany({ where: { userId } });
       if (data.roleIds.length > 0) {
         await tx.userRole.createMany({
           data: data.roleIds.map((roleId) => ({
-            userId: id,
+            userId,
             roleId,
-            grantedBy: grantedById,
+            grantedBy: parseId(grantedById),
             isActive: true,
           })),
         });
       }
     }
 
-    return fetchUser(tx, id);
+    return fetchUser(tx, userId);
   });
 }
 
-export async function deleteUser(id: string, actorId: string) {
-  if (id === actorId) {
+export async function deleteUser(id: IdInput, actorId: IdInput) {
+  const userId = parseId(id);
+  const actor = parseId(actorId);
+  if (userId === actor) {
     throw new Error("BAD_REQUEST:You cannot delete your own account");
   }
-  await getUser(id);
-  await prisma.user.delete({ where: { id } });
+  await getUser(userId);
+  await prisma.user.delete({ where: { id: userId } });
 }

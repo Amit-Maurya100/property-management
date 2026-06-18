@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { BCRYPT_ROUNDS } from "@/lib/errors";
+import { idToString, parseId, resolveUserId, type IdInput } from "@/lib/ids";
 import { getUserPermissionsFromDb } from "@/lib/permissions/db";
 import type { UserScope } from "@/lib/permissions";
 
@@ -84,9 +85,10 @@ async function recordSuccessfulLogin(
   `;
 }
 
-async function loadUserAuthProfile(userId: string): Promise<AuthenticatedUser> {
+async function loadUserAuthProfile(userId: IdInput): Promise<AuthenticatedUser> {
+  const id = await resolveUserId(userId);
   const user = await prisma.user.findUniqueOrThrow({
-    where: { id: userId },
+    where: { id },
     select: {
       id: true,
       email: true,
@@ -103,7 +105,7 @@ async function loadUserAuthProfile(userId: string): Promise<AuthenticatedUser> {
     },
   });
 
-  const permissionRows = await getUserPermissionsFromDb(userId);
+  const permissionRows = await getUserPermissionsFromDb(id);
   const permissions = [
     ...new Set(
       permissionRows.map((row) => row.permission_name).filter(Boolean),
@@ -125,7 +127,7 @@ async function loadUserAuthProfile(userId: string): Promise<AuthenticatedUser> {
   );
 
   return {
-    id: user.id,
+    id: idToString(user.id),
     email: user.email,
     username: user.username,
     permissions,
@@ -186,15 +188,16 @@ export async function hashPassword(password: string): Promise<string> {
 }
 
 export async function adminUnlockUser(
-  adminId: string,
+  adminId: IdInput,
   userEmail: string,
   reason?: string,
 ): Promise<{ success: boolean; message: string }> {
+  const adminUserId = await resolveUserId(adminId);
   const result = await prisma.$queryRaw<{ admin_unlock_user: { success: boolean; message: string } }[]>`
     SELECT admin_unlock_user(
-      ${adminId}::uuid,
-      ${userEmail},
-      ${reason ?? null}
+      ${adminUserId}::bigint,
+      ${userEmail}::varchar,
+      ${reason ?? null}::text
     ) AS admin_unlock_user
   `;
 

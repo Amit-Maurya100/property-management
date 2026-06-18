@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { ForbiddenError } from "@/lib/errors";
 import { getZodErrorMessage, isZodError } from "@/lib/api/validation";
+import { serializeJson } from "@/lib/ids";
 
 export function jsonOk<T>(data: T, status = 200) {
-  return NextResponse.json(data, { status });
+  return NextResponse.json(serializeJson(data), { status });
 }
 
 export function jsonError(message: string, status: number) {

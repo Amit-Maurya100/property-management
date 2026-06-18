@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { parseId, type IdInput } from "@/lib/ids";
 
 const catalogSelect = {
   id: true,
@@ -20,9 +21,9 @@ export async function listResources(activeOnly = false) {
   });
 }
 
-export async function getResource(id: string) {
+export async function getResource(id: IdInput) {
   const resource = await prisma.resource.findUnique({
-    where: { id },
+    where: { id: parseId(id) },
     select: catalogSelect,
   });
   if (!resource) {
@@ -54,18 +55,19 @@ export async function createResource(data: {
 }
 
 export async function updateResource(
-  id: string,
+  id: IdInput,
   data: {
     name?: string;
     description?: string | null;
     isActive?: boolean;
   },
 ) {
-  await getResource(id);
+  const resourceId = parseId(id);
+  await getResource(resourceId);
 
   if (data.name) {
     const conflict = await prisma.resource.findFirst({
-      where: { name: data.name, id: { not: id } },
+      where: { name: data.name, id: { not: resourceId } },
     });
     if (conflict) {
       throw new Error("CONFLICT:Resource name already exists");
@@ -74,7 +76,7 @@ export async function updateResource(
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.resource.update({
-      where: { id },
+      where: { id: resourceId },
       data: {
         ...(data.name !== undefined ? { name: data.name } : {}),
         ...(data.description !== undefined ? { description: data.description } : {}),
@@ -84,23 +86,23 @@ export async function updateResource(
     });
 
     if (data.name) {
-      await tx.$executeRaw`
-        UPDATE "permissions"
-        SET "resource" = ${data.name}
-        WHERE "resource_id" = ${id}::uuid
-      `;
+      await tx.permission.updateMany({
+        where: { resourceId },
+        data: { resource: data.name },
+      });
     }
 
     return updated;
   });
 }
 
-export async function deleteResource(id: string) {
-  const resource = await getResource(id);
+export async function deleteResource(id: IdInput) {
+  const resourceId = parseId(id);
+  const resource = await getResource(resourceId);
   if (resource._count.permissions > 0) {
     throw new Error("BAD_REQUEST:Cannot delete resource used by permissions");
   }
-  await prisma.resource.delete({ where: { id } });
+  await prisma.resource.delete({ where: { id: resourceId } });
 }
 
 export async function listActions(activeOnly = false) {
@@ -111,9 +113,9 @@ export async function listActions(activeOnly = false) {
   });
 }
 
-export async function getAction(id: string) {
+export async function getAction(id: IdInput) {
   const action = await prisma.action.findUnique({
-    where: { id },
+    where: { id: parseId(id) },
     select: catalogSelect,
   });
   if (!action) {
@@ -145,18 +147,19 @@ export async function createAction(data: {
 }
 
 export async function updateAction(
-  id: string,
+  id: IdInput,
   data: {
     name?: string;
     description?: string | null;
     isActive?: boolean;
   },
 ) {
-  await getAction(id);
+  const actionId = parseId(id);
+  await getAction(actionId);
 
   if (data.name) {
     const conflict = await prisma.action.findFirst({
-      where: { name: data.name, id: { not: id } },
+      where: { name: data.name, id: { not: actionId } },
     });
     if (conflict) {
       throw new Error("CONFLICT:Action name already exists");
@@ -165,7 +168,7 @@ export async function updateAction(
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.action.update({
-      where: { id },
+      where: { id: actionId },
       data: {
         ...(data.name !== undefined ? { name: data.name } : {}),
         ...(data.description !== undefined ? { description: data.description } : {}),
@@ -175,32 +178,35 @@ export async function updateAction(
     });
 
     if (data.name) {
-      await tx.$executeRaw`
-        UPDATE "permissions"
-        SET "action" = ${data.name}
-        WHERE "action_id" = ${id}::uuid
-      `;
+      await tx.permission.updateMany({
+        where: { actionId },
+        data: { action: data.name },
+      });
     }
 
     return updated;
   });
 }
 
-export async function deleteAction(id: string) {
-  const action = await getAction(id);
+export async function deleteAction(id: IdInput) {
+  const actionId = parseId(id);
+  const action = await getAction(actionId);
   if (action._count.permissions > 0) {
     throw new Error("BAD_REQUEST:Cannot delete action used by permissions");
   }
-  await prisma.action.delete({ where: { id } });
+  await prisma.action.delete({ where: { id: actionId } });
 }
 
 export async function resolveResourceAndAction(
-  data: { resourceId: string; actionId: string },
+  data: { resourceId: IdInput; actionId: IdInput },
   client: CatalogClient = prisma,
 ) {
+  const resourceId = parseId(data.resourceId);
+  const actionId = parseId(data.actionId);
+
   const [resource, action] = await Promise.all([
-    client.resource.findUnique({ where: { id: data.resourceId } }),
-    client.action.findUnique({ where: { id: data.actionId } }),
+    client.resource.findUnique({ where: { id: resourceId } }),
+    client.action.findUnique({ where: { id: actionId } }),
   ]);
 
   if (!resource || !resource.isActive) {

@@ -1,12 +1,17 @@
 import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { getVisibleAdminNavItems } from "@/lib/admin/nav";
+import { isCustomerUser } from "@/lib/navigation/nav";
 import { redirect } from "next/navigation";
 
 export default async function DashboardPage() {
   const session = await auth();
   if (!session?.user?.id) {
     redirect("/login");
+  }
+
+  if (await isCustomerUser(session)) {
+    redirect("/properties");
   }
 
   const adminNavItems = await getVisibleAdminNavItems(session.user.id);

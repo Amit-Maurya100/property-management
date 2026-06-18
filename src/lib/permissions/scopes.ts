@@ -1,15 +1,16 @@
 import { prisma } from "@/lib/db";
+import { parseId, type IdInput } from "@/lib/ids";
 import type { UserScope } from "@/lib/permissions";
 import { userHasPermissionInDb } from "@/lib/permissions/db";
 
 export async function getUserScopes(
-  userId: string,
+  userId: IdInput,
   scopeType?: string,
 ): Promise<UserScope[]> {
   const scopes = await prisma.userRoleScope.findMany({
     where: {
       userRole: {
-        userId,
+        userId: parseId(userId),
         isActive: true,
         OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       },
@@ -28,7 +29,7 @@ export async function getUserScopes(
 }
 
 export async function canAccessResource(
-  userId: string,
+  userId: IdInput,
   resource: string,
   action: string,
   context: { propertyId?: string; departmentId?: string } = {},

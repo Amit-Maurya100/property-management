@@ -25,7 +25,8 @@ enum AttemptType {
 }
 
 model User {
-  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                  BigInt        @id @default(autoincrement())
+  uuid                String        @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   username            String        @unique @db.VarChar(100)
   email               String        @unique @db.VarChar(255)
   passwordHash        String        @map("password_hash") @db.VarChar(255)
@@ -38,9 +39,11 @@ model User {
   createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  userRoles      UserRole[]   @relation("UserRoles")
-  grantedRoles   UserRole[]   @relation("GrantedBy")
-  loginAudits    LoginAudit[]
+  userRoles    UserRole[]   @relation("UserRoles")
+  grantedRoles UserRole[]   @relation("GrantedBy")
+  loginAudits  LoginAudit[]
+  properties   Property[]   @relation("PropertyOwner")
+  tenants      Tenant[]     @relation("TenantOwner")
 
   @@index([username], map: "idx_users_username")
   @@index([email], map: "idx_users_email")
@@ -50,7 +53,8 @@ model User {
 }
 
 model Role {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id          BigInt   @id @default(autoincrement())
+  uuid        String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name        String   @unique @db.VarChar(100)
   description String?
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -63,7 +67,8 @@ model Role {
 }
 
 model Resource {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id          BigInt   @id @default(autoincrement())
+  uuid        String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name        String   @unique @db.VarChar(100)
   description String?
   isActive    Boolean  @default(true) @map("is_active")
@@ -78,7 +83,8 @@ model Resource {
 }
 
 model Action {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id          BigInt   @id @default(autoincrement())
+  uuid        String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name        String   @unique @db.VarChar(50)
   description String?
   isActive    Boolean  @default(true) @map("is_active")
@@ -93,17 +99,18 @@ model Action {
 }
 
 model Permission {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  resourceId  String   @map("resource_id") @db.Uuid
-  actionId    String   @map("action_id") @db.Uuid
+  id          BigInt   @id @default(autoincrement())
+  uuid        String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resourceId  BigInt   @map("resource_id")
+  actionId    BigInt   @map("action_id")
   resource    String   @db.VarChar(100)
   action      String   @db.VarChar(50)
   name        String   @db.VarChar(150)
   description String?
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  resourceRef Resource @relation(fields: [resourceId], references: [id], onDelete: Restrict)
-  actionRef   Action   @relation(fields: [actionId], references: [id], onDelete: Restrict)
+  resourceRef     Resource         @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  actionRef       Action           @relation(fields: [actionId], references: [id], onDelete: Restrict)
   rolePermissions RolePermission[]
   policies        Policy[]
 
@@ -118,8 +125,8 @@ model Permission {
 }
 
 model RolePermission {
-  roleId       String   @map("role_id") @db.Uuid
-  permissionId String   @map("permission_id") @db.Uuid
+  roleId       BigInt   @map("role_id")
+  permissionId BigInt   @map("permission_id")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
@@ -132,18 +139,19 @@ model RolePermission {
 }
 
 model UserRole {
-  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String    @map("user_id") @db.Uuid
-  roleId    String    @map("role_id") @db.Uuid
-  grantedBy String?   @map("granted_by") @db.Uuid
+  id        BigInt    @id @default(autoincrement())
+  uuid      String    @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    BigInt    @map("user_id")
+  roleId    BigInt    @map("role_id")
+  grantedBy BigInt?   @map("granted_by")
   grantedAt DateTime  @default(now()) @map("granted_at") @db.Timestamptz
   expiresAt DateTime? @map("expires_at") @db.Timestamptz
   isActive  Boolean   @default(true) @map("is_active")
 
-  user   User  @relation("UserRoles", fields: [userId], references: [id], onDelete: Cascade)
-  role   Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  granter User? @relation("GrantedBy", fields: [grantedBy], references: [id], onDelete: SetNull)
-  scopes UserRoleScope[]
+  user    User            @relation("UserRoles", fields: [userId], references: [id], onDelete: Cascade)
+  role    Role            @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  granter User?           @relation("GrantedBy", fields: [grantedBy], references: [id], onDelete: SetNull)
+  scopes  UserRoleScope[]
 
   @@unique([userId, roleId], map: "unique_user_role")
   @@index([userId], map: "idx_user_roles_user_id")
@@ -155,8 +163,9 @@ model UserRole {
 }
 
 model UserRoleScope {
-  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userRoleId String   @map("user_role_id") @db.Uuid
+  id         BigInt   @id @default(autoincrement())
+  uuid       String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userRoleId BigInt   @map("user_role_id")
   scopeType  String   @map("scope_type") @db.VarChar(50)
   scopeValue String   @map("scope_value") @db.VarChar(255)
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -170,8 +179,9 @@ model UserRoleScope {
 }
 
 model Policy {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  permissionId String   @map("permission_id") @db.Uuid
+  id           BigInt   @id @default(autoincrement())
+  uuid         String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  permissionId BigInt   @map("permission_id")
   condition    Json
   priority     Int      @default(0)
   isActive     Boolean  @default(true) @map("is_active")
@@ -187,8 +197,9 @@ model Policy {
 }
 
 model LoginAudit {
-  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId        String?     @map("user_id") @db.Uuid
+  id            BigInt      @id @default(autoincrement())
+  uuid          String      @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        BigInt?     @map("user_id")
   email         String?     @db.VarChar(255)
   ipAddress     String?     @map("ip_address")
   userAgent     String?     @map("user_agent")
@@ -202,4 +213,327 @@ model LoginAudit {
   @@index([attemptTime(sort: Desc)], map: "idx_login_audit_attempt_time")
   @@index([ipAddress], map: "idx_login_audit_ip")
   @@map("login_audit")
+}
+
+enum PropertyType {
+  APARTMENT
+  HOTEL
+  HOSTEL
+  OFFICE
+
+  @@map("property_type")
+}
+
+enum UnitType {
+  APARTMENT
+  ROOM
+  OFFICE
+  SHOP
+  HALL
+
+  @@map("unit_type")
+}
+
+enum RoomType {
+  BEDROOM
+  KITCHEN
+  BATHROOM
+  OFFICE_ROOM
+
+  @@map("room_type")
+}
+
+enum BedType {
+  SINGLE
+  DOUBLE
+  BUNK
+
+  @@map("bed_type")
+}
+
+enum AmenityCategory {
+  INTERNET
+  PARKING
+  SECURITY
+
+  @@map("amenity_category")
+}
+
+enum BillingCycle {
+  HOURLY
+  DAILY
+  WEEKLY
+  MONTHLY
+
+  @@map("billing_cycle")
+}
+
+enum AvailabilityStatus {
+  AVAILABLE
+  RESERVED
+  OCCUPIED
+
+  @@map("availability_status")
+}
+
+model Address {
+  id        BigInt   @id @default(autoincrement())
+  uuid      String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  line1     String   @map("line1") @db.VarChar(255)
+  line2     String?  @map("line2") @db.VarChar(255)
+  city      String   @db.VarChar(100)
+  state     String?  @db.VarChar(100)
+  country   String   @db.VarChar(100)
+  zipcode   String?  @db.VarChar(20)
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  property Property?
+
+  @@map("addresses")
+}
+
+model Property {
+  id           BigInt       @id @default(autoincrement())
+  uuid         String       @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String       @db.VarChar(255)
+  description  String?
+  propertyType PropertyType @map("property_type")
+  ownerId      BigInt       @map("owner_id")
+  addressId    BigInt       @unique @map("address_id")
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  owner    User              @relation("PropertyOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  address  Address           @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  buildings Building[]
+  images   PropertyImage[]
+  amenities PropertyAmenity[]
+
+  @@index([ownerId], map: "idx_properties_owner_id")
+  @@index([propertyType], map: "idx_properties_type")
+  @@map("properties")
+}
+
+model PropertyImage {
+  id         BigInt   @id @default(autoincrement())
+  uuid       String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  propertyId BigInt   @map("property_id")
+  url        String   @db.VarChar(500)
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId], map: "idx_property_images_property_id")
+  @@map("property_images")
+}
+
+model Amenity {
+  id          BigInt          @id @default(autoincrement())
+  uuid        String          @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String          @unique @db.VarChar(100)
+  category    AmenityCategory
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  properties PropertyAmenity[]
+
+  @@index([category], map: "idx_amenities_category")
+  @@map("amenities")
+}
+
+model PropertyAmenity {
+  propertyId BigInt   @map("property_id")
+  amenityId  BigInt   @map("amenity_id")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  amenity  Amenity  @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+
+  @@id([propertyId, amenityId])
+  @@map("property_amenities")
+}
+
+model Building {
+  id         BigInt   @id @default(autoincrement())
+  uuid       String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  propertyId BigInt   @map("property_id")
+  name       String   @db.VarChar(255)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  floors   Floor[]
+
+  @@index([propertyId], map: "idx_buildings_property_id")
+  @@map("buildings")
+}
+
+model Floor {
+  id          BigInt   @id @default(autoincrement())
+  uuid        String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  buildingId  BigInt   @map("building_id")
+  floorNumber Int      @map("floor_number")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  units    Unit[]
+
+  @@unique([buildingId, floorNumber], map: "unique_building_floor_number")
+  @@index([buildingId], map: "idx_floors_building_id")
+  @@map("floors")
+}
+
+model Unit {
+  id         BigInt   @id @default(autoincrement())
+  uuid       String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  floorId    BigInt   @map("floor_id")
+  unitNumber String   @map("unit_number") @db.VarChar(50)
+  unitType   UnitType @map("unit_type")
+  capacity   Int?
+  area       Decimal? @db.Decimal(10, 2)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  floor          Floor          @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  rooms          Room[]
+  pricingRecords Pricing[]
+  availabilities Availability[]
+  rents          Rent[]
+  tenants        Tenant[]
+
+  @@unique([floorId, unitNumber], map: "unique_floor_unit_number")
+  @@index([floorId], map: "idx_units_floor_id")
+  @@map("units")
+}
+
+model Room {
+  id       BigInt   @id @default(autoincrement())
+  uuid     String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unitId   BigInt   @map("unit_id")
+  name     String   @db.VarChar(100)
+  roomType RoomType @map("room_type")
+  area     Decimal? @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  unit Unit  @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  beds Bed[]
+
+  @@index([unitId], map: "idx_rooms_unit_id")
+  @@map("rooms")
+}
+
+model Bed {
+  id        BigInt   @id @default(autoincrement())
+  uuid      String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId    BigInt   @map("room_id")
+  bedType   BedType  @map("bed_type")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@index([roomId], map: "idx_beds_room_id")
+  @@map("beds")
+}
+
+model Pricing {
+  id              BigInt       @id @default(autoincrement())
+  uuid            String       @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unitId          BigInt       @map("unit_id")
+  currency        String       @db.VarChar(3)
+  basePrice       Decimal      @map("base_price") @db.Decimal(12, 2)
+  billingCycle    BillingCycle @map("billing_cycle")
+  securityDeposit Decimal?     @map("security_deposit") @db.Decimal(12, 2)
+  effectiveFrom   DateTime     @default(now()) @map("effective_from") @db.Timestamptz
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@index([unitId], map: "idx_pricing_unit_id")
+  @@index([effectiveFrom(sort: Desc)], map: "idx_pricing_effective_from")
+  @@map("pricing")
+}
+
+model Availability {
+  id            BigInt             @id @default(autoincrement())
+  uuid          String             @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unitId        BigInt             @map("unit_id")
+  availableFrom DateTime?          @map("available_from") @db.Timestamptz
+  availableTo   DateTime?          @map("available_to") @db.Timestamptz
+  status        AvailabilityStatus
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@index([unitId], map: "idx_availability_unit_id")
+  @@index([status], map: "idx_availability_status")
+  @@map("availability")
+}
+
+model Tenant {
+  id                      BigInt    @id @default(autoincrement())
+  uuid                    String    @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId                 BigInt    @map("owner_id")
+  unitId                  BigInt?   @map("unit_id")
+  firstName               String    @map("first_name") @db.VarChar(100)
+  lastName                String    @map("last_name") @db.VarChar(100)
+  email                   String?   @db.VarChar(255)
+  phone                   String?   @db.VarChar(30)
+  idDocument              String?   @map("id_document") @db.VarChar(100)
+  pictureUrl              String?   @map("picture_url") @db.VarChar(2048)
+  initialRent             Decimal?  @map("initial_rent") @db.Decimal(12, 2)
+  leaseFrom               DateTime? @map("lease_from") @db.Date
+  leaseTo                 DateTime? @map("lease_to") @db.Date
+  monthlyDueDay           Int?      @map("monthly_due_day")
+  initialGasUnits         Decimal?  @map("initial_gas_units") @db.Decimal(10, 2)
+  initialElectricityUnits Decimal?  @map("initial_electricity_units") @db.Decimal(10, 2)
+  isActive                Boolean   @default(true) @map("is_active")
+  notes                   String?
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt               DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  owner User   @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  unit  Unit?  @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  rents Rent[]
+
+  @@index([ownerId], map: "idx_tenants_owner_id")
+  @@index([unitId], map: "idx_tenants_unit_id")
+  @@index([email], map: "idx_tenants_email")
+  @@map("tenants")
+}
+
+model Rent {
+  id               BigInt    @id @default(autoincrement())
+  uuid             String    @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         BigInt    @map("tenant_id")
+  unitId           BigInt    @map("unit_id")
+  startDate        DateTime  @map("start_date") @db.Date
+  endDate          DateTime? @map("end_date") @db.Date
+  rent             Decimal   @db.Decimal(12, 2)
+  totalRent        Decimal?  @map("total_rent") @db.Decimal(12, 2)
+  electricityUnits Decimal?  @map("electricity_units") @db.Decimal(10, 2)
+  gasUnits         Decimal?  @map("gas_units") @db.Decimal(10, 2)
+  maintenance      Decimal?  @db.Decimal(12, 2)
+  misc             Decimal?  @db.Decimal(12, 2)
+  dueDate          DateTime  @map("due_date") @db.Date
+  utilityBaseline  Json?     @map("utility_baseline")
+  isActive         Boolean   @default(true) @map("is_active")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId], map: "idx_rents_tenant_id")
+  @@index([unitId], map: "idx_rents_unit_id")
+  @@index([dueDate], map: "idx_rents_due_date")
+  @@index([isActive], map: "idx_rents_is_active")
+  @@map("rents")
 }

@@ -15,11 +15,16 @@ export const authConfig = {
       const { pathname } = request.nextUrl;
       const isLoggedIn = !!auth?.user;
       const isPublic =
-        pathname.startsWith("/login") || pathname.startsWith("/api/auth");
+        pathname.startsWith("/login") ||
+        pathname.startsWith("/register") ||
+        pathname.startsWith("/api/auth");
 
       if (isPublic) {
-        if (isLoggedIn && pathname.startsWith("/login")) {
-          return NextResponse.redirect(new URL("/dashboard", request.nextUrl));
+        if (
+          isLoggedIn &&
+          (pathname.startsWith("/login") || pathname.startsWith("/register"))
+        ) {
+          return NextResponse.redirect(new URL("/", request.nextUrl));
         }
         return true;
       }

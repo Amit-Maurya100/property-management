@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { resolveResourceAndAction } from "@/lib/admin/catalogs";
+import { parseId, type IdInput } from "@/lib/ids";
 
 const permissionSelect = {
   id: true,
@@ -17,9 +18,9 @@ const permissionSelect = {
 
 type PermissionClient = Pick<typeof prisma, "permission">;
 
-async function fetchPermission(client: PermissionClient, id: string) {
+async function fetchPermission(client: PermissionClient, id: IdInput) {
   const permission = await client.permission.findUnique({
-    where: { id },
+    where: { id: parseId(id) },
     select: permissionSelect,
   });
   if (!permission) {
@@ -35,66 +36,65 @@ export async function listPermissions() {
   });
 }
 
-export async function getPermission(id: string) {
+export async function getPermission(id: IdInput) {
   return fetchPermission(prisma, id);
 }
 
 export async function createPermission(data: {
-  resourceId: string;
-  actionId: string;
+  resourceId: IdInput;
+  actionId: IdInput;
   description?: string;
 }) {
+  const resourceId = parseId(data.resourceId);
+  const actionId = parseId(data.actionId);
+
   const existing = await prisma.permission.findFirst({
-    where: {
-      resourceId: data.resourceId,
-      actionId: data.actionId,
-    },
+    where: { resourceId, actionId },
   });
   if (existing) {
     throw new Error("CONFLICT:Permission already exists for this resource and action");
   }
 
-  const { resource, action } = await resolveResourceAndAction(data);
+  const { resource, action } = await resolveResourceAndAction({
+    resourceId,
+    actionId,
+  });
 
-  const rows = await prisma.$queryRaw<{ id: string }[]>`
-    INSERT INTO "permissions" ("resource_id", "action_id", "resource", "action", "description")
-    VALUES (
-      ${data.resourceId}::uuid,
-      ${data.actionId}::uuid,
-      ${resource.name},
-      ${action.name},
-      ${data.description ?? null}
-    )
-    RETURNING id
-  `;
+  const permission = await prisma.permission.create({
+    data: {
+      resourceId,
+      actionId,
+      resource: resource.name,
+      action: action.name,
+      name: `${resource.name}:${action.name}`,
+      description: data.description,
+    },
+    select: { id: true },
+  });
 
-  const id = rows[0]?.id;
-  if (!id) {
-    throw new Error("BAD_REQUEST:Failed to create permission");
-  }
-
-  return getPermission(id);
+  return getPermission(permission.id);
 }
 
 export async function updatePermission(
-  id: string,
+  id: IdInput,
   data: {
-    resourceId?: string;
-    actionId?: string;
+    resourceId?: IdInput;
+    actionId?: IdInput;
     description?: string | null;
   },
 ) {
-  const current = await getPermission(id);
+  const permissionId = parseId(id);
+  const current = await getPermission(permissionId);
 
-  const resourceId = data.resourceId ?? current.resourceId;
-  const actionId = data.actionId ?? current.actionId;
+  const resourceId = data.resourceId ? parseId(data.resourceId) : current.resourceId;
+  const actionId = data.actionId ? parseId(data.actionId) : current.actionId;
 
   if (resourceId !== current.resourceId || actionId !== current.actionId) {
     const conflict = await prisma.permission.findFirst({
       where: {
         resourceId,
         actionId,
-        id: { not: id },
+        id: { not: permissionId },
       },
     });
     if (conflict) {
@@ -106,30 +106,33 @@ export async function updatePermission(
       actionId,
     });
 
-    await prisma.$executeRaw`
-      UPDATE "permissions"
-      SET "resource_id" = ${resourceId}::uuid,
-          "action_id" = ${actionId}::uuid,
-          "resource" = ${resource.name},
-          "action" = ${action.name},
-          "description" = COALESCE(${data.description ?? null}, "description")
-      WHERE id = ${id}::uuid
-    `;
+    await prisma.permission.update({
+      where: { id: permissionId },
+      data: {
+        resourceId,
+        actionId,
+        resource: resource.name,
+        action: action.name,
+        name: `${resource.name}:${action.name}`,
+        ...(data.description !== undefined ? { description: data.description } : {}),
+      },
+    });
   } else if (data.description !== undefined) {
     await prisma.permission.update({
-      where: { id },
+      where: { id: permissionId },
       data: { description: data.description },
     });
   }
 
-  return getPermission(id);
+  return getPermission(permissionId);
 }
 
-export async function deletePermission(id: string) {
-  const permission = await getPermission(id);
+export async function deletePermission(id: IdInput) {
+  const permissionId = parseId(id);
+  const permission = await getPermission(permissionId);
   if (permission._count.rolePermissions > 0 || permission._count.policies > 0) {
     throw new Error("BAD_REQUEST:Cannot delete permission in use by roles or policies");
   }
 
-  await prisma.permission.delete({ where: { id } });
+  await prisma.permission.delete({ where: { id: permissionId } });
 }
