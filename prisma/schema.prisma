@@ -1,0 +1,205 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AccountStatus {
+  ACTIVE
+  LOCKED
+  DISABLED
+  EXPIRED
+
+  @@map("account_status")
+}
+
+enum AttemptType {
+  SUCCESS
+  FAILURE
+  LOCKED
+
+  @@map("attempt_type")
+}
+
+model User {
+  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  username            String        @unique @db.VarChar(100)
+  email               String        @unique @db.VarChar(255)
+  passwordHash        String        @map("password_hash") @db.VarChar(255)
+  loginAttempts       Int           @default(0) @map("login_attempts")
+  lastLoginAttempt    DateTime?     @map("last_login_attempt") @db.Timestamptz
+  lastSuccessfulLogin DateTime?     @map("last_successful_login") @db.Timestamptz
+  lockedUntil         DateTime?     @map("locked_until") @db.Timestamptz
+  isLocked            Boolean       @default(false) @map("is_locked")
+  accountStatus       AccountStatus @default(ACTIVE) @map("account_status")
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  userRoles      UserRole[]   @relation("UserRoles")
+  grantedRoles   UserRole[]   @relation("GrantedBy")
+  loginAudits    LoginAudit[]
+
+  @@index([username], map: "idx_users_username")
+  @@index([email], map: "idx_users_email")
+  @@index([accountStatus, isLocked], map: "idx_users_account_status")
+  @@index([lockedUntil], map: "idx_users_locked_until")
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @unique @db.VarChar(100)
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@map("roles")
+}
+
+model Resource {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @unique @db.VarChar(100)
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  permissions Permission[]
+
+  @@index([name], map: "idx_resources_name")
+  @@index([isActive], map: "idx_resources_active")
+  @@map("resources")
+}
+
+model Action {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @unique @db.VarChar(50)
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  permissions Permission[]
+
+  @@index([name], map: "idx_actions_name")
+  @@index([isActive], map: "idx_actions_active")
+  @@map("actions")
+}
+
+model Permission {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resourceId  String   @map("resource_id") @db.Uuid
+  actionId    String   @map("action_id") @db.Uuid
+  resource    String   @db.VarChar(100)
+  action      String   @db.VarChar(50)
+  name        String   @db.VarChar(150)
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  resourceRef Resource @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  actionRef   Action   @relation(fields: [actionId], references: [id], onDelete: Restrict)
+  rolePermissions RolePermission[]
+  policies        Policy[]
+
+  @@unique([resourceId, actionId], map: "unique_permission_resource_action")
+  @@unique([resource, action], map: "unique_resource_action")
+  @@index([resourceId], map: "idx_permissions_resource_id")
+  @@index([actionId], map: "idx_permissions_action_id")
+  @@index([resource], map: "idx_permissions_resource")
+  @@index([action], map: "idx_permissions_action")
+  @@index([name], map: "idx_permissions_name")
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String   @map("role_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([roleId], map: "idx_role_permissions_role_id")
+  @@index([permissionId], map: "idx_role_permissions_permission_id")
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  roleId    String    @map("role_id") @db.Uuid
+  grantedBy String?   @map("granted_by") @db.Uuid
+  grantedAt DateTime  @default(now()) @map("granted_at") @db.Timestamptz
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz
+  isActive  Boolean   @default(true) @map("is_active")
+
+  user   User  @relation("UserRoles", fields: [userId], references: [id], onDelete: Cascade)
+  role   Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  granter User? @relation("GrantedBy", fields: [grantedBy], references: [id], onDelete: SetNull)
+  scopes UserRoleScope[]
+
+  @@unique([userId, roleId], map: "unique_user_role")
+  @@index([userId], map: "idx_user_roles_user_id")
+  @@index([roleId], map: "idx_user_roles_role_id")
+  @@index([grantedBy], map: "idx_user_roles_granted_by")
+  @@index([expiresAt], map: "idx_user_roles_expires_at")
+  @@index([isActive], map: "idx_user_roles_active")
+  @@map("user_roles")
+}
+
+model UserRoleScope {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userRoleId String   @map("user_role_id") @db.Uuid
+  scopeType  String   @map("scope_type") @db.VarChar(50)
+  scopeValue String   @map("scope_value") @db.VarChar(255)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  userRole UserRole @relation(fields: [userRoleId], references: [id], onDelete: Cascade)
+
+  @@unique([userRoleId, scopeType, scopeValue], map: "unique_user_role_scope")
+  @@index([userRoleId], map: "idx_user_role_scopes_user_role_id")
+  @@index([scopeType, scopeValue], map: "idx_user_role_scopes_lookup")
+  @@map("user_role_scopes")
+}
+
+model Policy {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  condition    Json
+  priority     Int      @default(0)
+  isActive     Boolean  @default(true) @map("is_active")
+  description  String?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@index([permissionId], map: "idx_policies_permission_id")
+  @@index([priority(sort: Desc)], map: "idx_policies_priority")
+  @@map("policies")
+}
+
+model LoginAudit {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String?     @map("user_id") @db.Uuid
+  email         String?     @db.VarChar(255)
+  ipAddress     String?     @map("ip_address")
+  userAgent     String?     @map("user_agent")
+  attemptType   AttemptType @map("attempt_type")
+  attemptTime   DateTime    @default(now()) @map("attempt_time") @db.Timestamptz
+  failureReason String?     @map("failure_reason")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_login_audit_user_id")
+  @@index([attemptTime(sort: Desc)], map: "idx_login_audit_attempt_time")
+  @@index([ipAddress], map: "idx_login_audit_ip")
+  @@map("login_audit")
+}
