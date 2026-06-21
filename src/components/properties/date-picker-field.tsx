@@ -10,6 +10,7 @@ type DatePickerFieldProps = {
   onChange: (value: string) => void;
   required?: boolean;
   allowPastValue?: string;
+  allowPastDates?: boolean;
 };
 
 export function DatePickerField({
@@ -18,10 +19,14 @@ export function DatePickerField({
   onChange,
   required = false,
   allowPastValue,
+  allowPastDates = false,
 }: DatePickerFieldProps) {
   const today = todayIso();
-  const minDate =
-    allowPastValue && allowPastValue < today ? allowPastValue : today;
+  const minDate = allowPastDates
+    ? undefined
+    : allowPastValue && allowPastValue < today
+      ? allowPastValue
+      : today;
 
   return (
     <div>

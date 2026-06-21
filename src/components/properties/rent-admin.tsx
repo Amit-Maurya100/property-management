@@ -10,33 +10,42 @@ import { DatePickerField } from "@/components/properties/date-picker-field";
 import { RowActions } from "@/components/admin/row-actions";
 import {
   breakdownFromRentRow,
-  calcDueDate,
+  calcDueDateFromPeriodStart,
+  calcMonthlyPeriodEnd,
   calcRentBreakdown,
   firstDayOfMonth,
-  isAgreementOver,
-  lastDayOfMonth,
   resolveUtilityBaselines,
   toNumber,
 } from "@/lib/properties/rent-calculations";
 import { RentBreakdownPanel } from "@/components/properties/rent-breakdown-panel";
+import type { BuildingUtilityRateSnapshot } from "@/lib/properties/building-utility-types";
+import { readApiError, readApiJson } from "@/lib/api/parse-response";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 type TenantDetail = {
   id: string;
   firstName: string;
   lastName: string;
-  initialRent?: string | null;
+  unit?: { id: string; unitNumber: string } | null;
+};
+
+type AssignmentDetail = {
+  id: string;
+  tenantId: string;
+  unitId: string;
+  monthlyRent?: string | null;
   leaseFrom?: string | null;
   leaseTo?: string | null;
   monthlyDueDay?: number | null;
   initialGasUnits?: string | null;
   initialElectricityUnits?: string | null;
   isActive: boolean;
-  unit?: { id: string; unitNumber: string } | null;
+  unit: { id: string; unitNumber: string };
 };
 
 type RentRow = {
   id: string;
+  tenantAssignmentId: string;
   startDate: string;
   endDate?: string | null;
   rent: string;
@@ -46,13 +55,19 @@ type RentRow = {
   maintenance?: string | null;
   misc?: string | null;
   dueDate: string;
-  isActive: boolean;
   utilityBaseline?: { electricityUnits: number; gasUnits: number } | null;
+  utilityRateSnapshot?: BuildingUtilityRateSnapshot | null;
   tenant: { id: string; firstName: string; lastName: string };
+  tenantAssignment: {
+    id: string;
+    monthlyRent?: string | null;
+    leaseFrom?: string | null;
+    leaseTo?: string | null;
+    monthlyDueDay?: number | null;
+    isActive: boolean;
+  };
   unit: { id: string; unitNumber: string };
 };
-
-type UnitOption = { id: string; unitNumber: string };
 
 const emptyMonthlyForm = {
   tenantId: "",
@@ -64,20 +79,6 @@ const emptyMonthlyForm = {
   misc: "",
 };
 
-const emptyLeaseForm = {
-  tenantId: "",
-  unitId: "",
-  startDate: "",
-  endDate: "",
-  rent: "",
-  electricityUnits: "",
-  gasUnits: "",
-  maintenance: "",
-  misc: "",
-  dueDate: "",
-  isActive: true,
-};
-
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
   return value.slice(0, 10);
@@ -87,39 +88,40 @@ function tenantName(tenant: { firstName: string; lastName: string }) {
   return `${tenant.firstName} ${tenant.lastName}`;
 }
 
-function baselineSourceLabel(source: "stored" | "tenant" | "prior_bill") {
+function baselineSourceLabel(source: "stored" | "assignment" | "prior_bill") {
   if (source === "stored") return "saved with this bill";
-  if (source === "tenant") return "from tenant initial readings";
+  if (source === "assignment") return "from assignment initial readings";
   return "from previous month bill";
 }
 
 export function RentAdmin({ grants }: { grants: ResourceGrants }) {
   const [tenants, setTenants] = useState<TenantDetail[]>([]);
+  const [assignments, setAssignments] = useState<AssignmentDetail[]>([]);
   const [allRents, setAllRents] = useState<RentRow[]>([]);
-  const [units, setUnits] = useState<UnitOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingRent, setEditingRent] = useState<RentRow | null>(null);
-  const [formMode, setFormMode] = useState<"monthly" | "lease">("monthly");
   const [monthlyForm, setMonthlyForm] = useState(emptyMonthlyForm);
-  const [leaseForm, setLeaseForm] = useState(emptyLeaseForm);
   const [filterTenantId, setFilterTenantId] = useState("");
   const [viewingRentId, setViewingRentId] = useState<string | null>(null);
+  const [utilityRates, setUtilityRates] = useState<BuildingUtilityRateSnapshot | null>(null);
+  const [utilityRateError, setUtilityRateError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [tenantsRes, rentsRes, unitsRes] = await Promise.all([
+      const [tenantsRes, assignmentsRes, rentsRes] = await Promise.all([
         fetch("/api/tenants"),
+        fetch("/api/tenant-assignments"),
         fetch("/api/rents"),
-        fetch("/api/units"),
       ]);
       if (!tenantsRes.ok) throw new Error((await tenantsRes.json()).error);
+      if (!assignmentsRes.ok) throw new Error((await assignmentsRes.json()).error);
       if (!rentsRes.ok) throw new Error((await rentsRes.json()).error);
       setTenants(await tenantsRes.json());
+      setAssignments(await assignmentsRes.json());
       setAllRents(await rentsRes.json());
-      if (unitsRes.ok) setUnits(await unitsRes.json());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load");
     } finally {
@@ -130,6 +132,42 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const activeUnitId = useMemo(() => {
+    const tenant = tenants.find((row) => row.id === monthlyForm.tenantId);
+    if (!tenant) return "";
+    const activeAssignment = assignments.find(
+      (row) => row.tenantId === tenant.id && row.isActive,
+    );
+    return activeAssignment?.unit.id ?? tenant.unit?.id ?? "";
+  }, [tenants, assignments, monthlyForm.tenantId]);
+
+  useEffect(() => {
+    if (!activeUnitId || !monthlyForm.startDate) {
+      setUtilityRates(editingRent?.utilityRateSnapshot ?? null);
+      setUtilityRateError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/buildings/utility-rates/active?unitId=${activeUnitId}&date=${monthlyForm.startDate}`,
+          { signal: controller.signal },
+        );
+        if (!res.ok) throw new Error(await readApiError(res));
+        setUtilityRates(await readApiJson<BuildingUtilityRateSnapshot>(res));
+        setUtilityRateError(null);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setUtilityRates(null);
+        setUtilityRateError(err instanceof Error ? err.message : "Utility rates unavailable");
+      }
+    })();
+
+    return () => controller.abort();
+  }, [activeUnitId, monthlyForm.startDate, editingRent?.utilityRateSnapshot]);
 
   const displayedRents = useMemo(
     () =>
@@ -143,30 +181,22 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
     const tenant = tenants.find((row) => row.id === monthlyForm.tenantId);
     if (!tenant) return null;
 
-    const activeLease = allRents.find(
-      (row) => row.tenant.id === tenant.id && row.isActive,
+    const activeAssignment = assignments.find(
+      (row) => row.tenantId === tenant.id && row.isActive,
     );
-
-    const rentPeriodEnd = activeLease?.endDate ?? tenant.leaseTo;
-    const agreementOver = activeLease
-      ? isAgreementOver(activeLease.endDate, tenant.leaseTo)
-      : rentPeriodEnd != null && new Date(rentPeriodEnd) < new Date(firstDayOfMonth());
-
-    const tenantInactive = !tenant.isActive;
 
     const monthlyRent =
-      activeLease != null
-        ? toNumber(activeLease.rent)
-        : tenant.initialRent != null
-          ? toNumber(tenant.initialRent)
-          : null;
+      activeAssignment?.monthlyRent != null
+        ? toNumber(activeAssignment.monthlyRent)
+        : null;
 
-    const monthlyBills = allRents.filter(
-      (row) => row.tenant.id === tenant.id && !row.isActive,
-    );
+    const monthlyBills = allRents.filter((row) => row.tenant.id === tenant.id);
 
     const baselineResult = resolveUtilityBaselines({
-      tenant,
+      assignment: activeAssignment ?? {
+        initialElectricityUnits: 0,
+        initialGasUnits: 0,
+      },
       monthlyBills: monthlyBills.map((row) => ({
         id: row.id,
         startDate: row.startDate,
@@ -181,61 +211,63 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
       excludeRentId: editingRent?.id,
     });
 
-    const baselineElectricityUnits = baselineResult.electricityUnits;
-    const baselineGasUnits = baselineResult.gasUnits;
-    const baselineFrozen = baselineResult.source === "stored";
-
     const dueDate =
-      tenant.monthlyDueDay != null ? calcDueDate(tenant.monthlyDueDay) : "";
+      activeAssignment?.monthlyDueDay != null && monthlyForm.startDate
+        ? calcDueDateFromPeriodStart(
+            monthlyForm.startDate,
+            activeAssignment.monthlyDueDay,
+          )
+        : "";
 
     const breakdown =
-      monthlyRent != null
+      monthlyRent != null && utilityRates
         ? calcRentBreakdown({
             monthlyRent,
             electricityUnits: toNumber(monthlyForm.electricityUnits),
             gasUnits: toNumber(monthlyForm.gasUnits),
-            baselineElectricityUnits,
-            baselineGasUnits,
+            baselineElectricityUnits: baselineResult.electricityUnits,
+            baselineGasUnits: baselineResult.gasUnits,
             maintenance: toNumber(monthlyForm.maintenance),
             misc: toNumber(monthlyForm.misc),
+            rates: utilityRates,
           })
         : null;
 
     return {
       tenant,
-      activeLease,
-      agreementOver,
-      tenantInactive,
+      activeAssignment,
       monthlyRent,
-      baselineElectricityUnits,
-      baselineGasUnits,
-      baselineFrozen,
+      baselineElectricityUnits: baselineResult.electricityUnits,
+      baselineGasUnits: baselineResult.gasUnits,
       baselineSource: baselineResult.source,
       dueDate,
       breakdown,
+      utilityRates,
       totalRent: breakdown?.total ?? null,
-      unitId: activeLease?.unit.id ?? tenant.unit?.id ?? "",
-      unitNumber: activeLease?.unit.unitNumber ?? tenant.unit?.unitNumber ?? "",
+      unitId: activeAssignment?.unit.id ?? tenant.unit?.id ?? "",
+      unitNumber: activeAssignment?.unit.unitNumber ?? tenant.unit?.unitNumber ?? "",
     };
-  }, [tenants, allRents, monthlyForm, editingRent]);
+  }, [tenants, assignments, allRents, monthlyForm, editingRent, utilityRates]);
 
   const canRecordMonthly =
     monthlyContext != null &&
-    !monthlyContext.agreementOver &&
-    !monthlyContext.tenantInactive &&
+    monthlyContext.activeAssignment != null &&
     monthlyContext.monthlyRent != null &&
     monthlyContext.unitId !== "" &&
     monthlyContext.dueDate !== "" &&
-    monthlyForm.startDate !== "";
+    monthlyForm.startDate !== "" &&
+    utilityRates != null &&
+    !utilityRateError;
 
   async function handleMonthlySubmit(event: FormEvent) {
     event.preventDefault();
-    if (!monthlyContext || !canRecordMonthly) return;
+    if (!monthlyContext || !canRecordMonthly || !monthlyContext.activeAssignment) return;
 
     setError(null);
     const payload = {
       tenantId: monthlyForm.tenantId,
       unitId: monthlyContext.unitId,
+      tenantAssignmentId: monthlyContext.activeAssignment.id,
       startDate: monthlyForm.startDate,
       endDate: monthlyForm.endDate || undefined,
       rent: monthlyContext.monthlyRent,
@@ -251,14 +283,11 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
         electricityUnits: monthlyContext.baselineElectricityUnits,
         gasUnits: monthlyContext.baselineGasUnits,
       },
-      isActive: false,
     };
 
     try {
-      const url = editingRent && !editingRent.isActive
-        ? `/api/rents/${editingRent.id}`
-        : "/api/rents";
-      const method = editingRent && !editingRent.isActive ? "PATCH" : "POST";
+      const url = editingRent ? `/api/rents/${editingRent.id}` : "/api/rents";
+      const method = editingRent ? "PATCH" : "POST";
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
@@ -273,57 +302,16 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
     }
   }
 
-  async function handleLeaseSubmit(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    const payload = {
-      tenantId: leaseForm.tenantId,
-      unitId: leaseForm.unitId,
-      startDate: leaseForm.startDate,
-      endDate: leaseForm.endDate || undefined,
-      rent: Number(leaseForm.rent),
-      electricityUnits: leaseForm.electricityUnits
-        ? Number(leaseForm.electricityUnits)
-        : undefined,
-      gasUnits: leaseForm.gasUnits ? Number(leaseForm.gasUnits) : undefined,
-      maintenance: leaseForm.maintenance ? Number(leaseForm.maintenance) : undefined,
-      misc: leaseForm.misc ? Number(leaseForm.misc) : undefined,
-      dueDate: leaseForm.dueDate,
-      isActive: leaseForm.isActive,
-    };
-
-    try {
-      const res = await fetch(editingRent ? `/api/rents/${editingRent.id}` : "/api/rents", {
-        method: editingRent ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error((await res.json()).error);
-      setEditingRent(null);
-      setFormMode("monthly");
-      setLeaseForm(emptyLeaseForm);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
-    }
-  }
-
-  const editingMonthlyStartDate =
-    editingRent && !editingRent.isActive ? formatDate(editingRent.startDate) : undefined;
-  const editingMonthlyEndDate =
-    editingRent && !editingRent.isActive && editingRent.endDate
-      ? formatDate(editingRent.endDate)
-      : undefined;
-
-  const editingStartDate = editingRent ? formatDate(editingRent.startDate) : undefined;
-  const editingEndDate = editingRent?.endDate ? formatDate(editingRent.endDate) : undefined;
-  const editingDueDate = editingRent ? formatDate(editingRent.dueDate) : undefined;
+  const editingMonthlyStartDate = editingRent
+    ? formatDate(editingRent.startDate)
+    : undefined;
 
   return (
     <div>
       <h1 className="text-3xl font-semibold">Rent</h1>
       <p className="mt-2 text-slate-400">
-        Record monthly rent with utility charges, or manage yearly lease periods.
+        Record monthly rent bills using the tenant&apos;s active assignment. Add a new
+        assignment on the Tenants tab when lease terms change or a lease expires.
       </p>
 
       {error ? (
@@ -348,34 +336,14 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
         </select>
       </div>
 
-      {(grants.canCreate || grants.canUpdate) &&
-      formMode === "monthly" &&
-      (!editingRent || !editingRent.isActive) ? (
+      {(grants.canCreate || grants.canUpdate) ? (
         <form
           onSubmit={handleMonthlySubmit}
           className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-6"
         >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-medium">
-              {editingRent ? "Edit monthly rent" : "Record monthly rent"}
-            </h2>
-            {grants.canCreate && !editingRent ? (
-              <button
-                type="button"
-                className={buttonSecondaryClass}
-                onClick={() => {
-                  setFormMode("lease");
-                  setLeaseForm({
-                    ...emptyLeaseForm,
-                    tenantId: filterTenantId,
-                    isActive: true,
-                  });
-                }}
-              >
-                Add yearly lease period
-              </button>
-            ) : null}
-          </div>
+          <h2 className="text-lg font-medium">
+            {editingRent ? "Edit monthly rent" : "Record monthly rent"}
+          </h2>
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <div>
@@ -386,11 +354,12 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                 value={monthlyForm.tenantId}
                 onChange={(e) => {
                   const tenantId = e.target.value;
+                  const startDate = firstDayOfMonth();
                   setMonthlyForm({
                     ...emptyMonthlyForm,
                     tenantId,
-                    startDate: firstDayOfMonth(),
-                    endDate: lastDayOfMonth(),
+                    startDate,
+                    endDate: calcMonthlyPeriodEnd(startDate),
                   });
                 }}
                 className={inputClass}
@@ -410,50 +379,47 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                   <label className="mb-1 block text-sm text-slate-300">Unit</label>
                   <input
                     readOnly
-                    value={monthlyContext.unitNumber || "No active lease unit"}
+                    value={monthlyContext.unitNumber || "No active assignment unit"}
                     className={`${inputClass} opacity-80`}
                   />
                 </div>
 
-                {monthlyContext.tenantInactive ? (
+                {!monthlyContext.activeAssignment ? (
                   <p className="md:col-span-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-                    This tenant is inactive. Activate the tenant before recording rent.
+                    No active assignment. Add a new rent assignment on the Tenants tab to
+                    continue after lease expiry or to change unit/rent terms.
                   </p>
                 ) : null}
 
-                {monthlyContext.agreementOver ? (
-                  <p className="md:col-span-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-                    Agreement is over. Rent period ends after the tenant lease end date (
-                    {formatDate(monthlyContext.tenant.leaseTo)}).
-                  </p>
-                ) : null}
-
-                {!monthlyContext.agreementOver &&
-                !monthlyContext.tenantInactive &&
-                monthlyContext.monthlyRent == null ? (
+                {monthlyContext.activeAssignment && monthlyContext.monthlyRent == null ? (
                   <p className="md:col-span-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-                    No monthly rent found. Set initial rent on the tenant, or add a yearly lease
-                    period under &quot;Add yearly lease period&quot;.
+                    Active assignment has no monthly rent. Update the assignment on the
+                    Tenants tab.
                   </p>
                 ) : null}
 
-                {!monthlyContext.agreementOver &&
-                !monthlyContext.tenantInactive &&
+                {monthlyContext.activeAssignment &&
                 monthlyContext.monthlyRent != null &&
                 monthlyContext.unitId === "" ? (
                   <p className="md:col-span-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-                    No unit assigned. Assign a unit on the tenant, or add a yearly lease period
-                    with a unit.
+                    Active assignment has no unit. Add an assignment with a unit on the
+                    Tenants tab.
                   </p>
                 ) : null}
 
-                {!monthlyContext.agreementOver &&
-                !monthlyContext.tenantInactive &&
+                {monthlyContext.activeAssignment &&
                 monthlyContext.monthlyRent != null &&
-                monthlyContext.unitId !== "" &&
                 monthlyContext.dueDate === "" ? (
                   <p className="md:col-span-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-                    Set the monthly due day (1–31) on the tenant to calculate the due date.
+                    Set the due days (added to the From date) on the active assignment to
+                    calculate the due date.
+                  </p>
+                ) : null}
+
+                {monthlyContext.activeAssignment?.leaseTo ? (
+                  <p className="md:col-span-2 text-sm text-slate-500">
+                    Active assignment lease ends {formatDate(monthlyContext.activeAssignment.leaseTo)}.
+                    You can still record rent or add a new assignment on the Tenants tab.
                   </p>
                 ) : null}
 
@@ -461,21 +427,30 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                   label="From"
                   required
                   value={monthlyForm.startDate}
+                  allowPastDates
                   allowPastValue={editingMonthlyStartDate}
-                  onChange={(startDate) => setMonthlyForm({ ...monthlyForm, startDate })}
+                  onChange={(startDate) =>
+                    setMonthlyForm({
+                      ...monthlyForm,
+                      startDate,
+                      endDate: calcMonthlyPeriodEnd(startDate),
+                    })
+                  }
                 />
-                <DatePickerField
-                  label="To"
-                  value={monthlyForm.endDate}
-                  allowPastValue={editingMonthlyEndDate}
-                  onChange={(endDate) => setMonthlyForm({ ...monthlyForm, endDate })}
-                />
+                <div>
+                  <label className="mb-1 block text-sm text-slate-300">To</label>
+                  <input
+                    readOnly
+                    value={monthlyForm.endDate || "Select From date"}
+                    className={`${inputClass} opacity-80`}
+                  />
+                </div>
 
                 <div>
                   <label className="mb-1 block text-sm text-slate-300">Due date</label>
                   <input
                     readOnly
-                    value={monthlyContext.dueDate || "Set monthly due day on tenant"}
+                    value={monthlyContext.dueDate || "Set due days on assignment"}
                     className={`${inputClass} opacity-80`}
                   />
                 </div>
@@ -495,8 +470,11 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                     className={inputClass}
                   />
                   <p className="mt-1 text-xs text-slate-500">
-                    Baseline: {monthlyContext.baselineElectricityUnits} units × ₹10 (
-                    {baselineSourceLabel(monthlyContext.baselineSource)})
+                    Baseline: {monthlyContext.baselineElectricityUnits} units
+                    {monthlyContext.utilityRates
+                      ? ` × ₹${monthlyContext.utilityRates.electricityUnitRate}`
+                      : ""}{" "}
+                    ({baselineSourceLabel(monthlyContext.baselineSource)})
                   </p>
                 </div>
 
@@ -513,8 +491,11 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                     className={inputClass}
                   />
                   <p className="mt-1 text-xs text-slate-500">
-                    Baseline: {monthlyContext.baselineGasUnits} units × ₹50 (
-                    {baselineSourceLabel(monthlyContext.baselineSource)})
+                    Baseline: {monthlyContext.baselineGasUnits} units
+                    {monthlyContext.utilityRates
+                      ? ` × ₹${monthlyContext.utilityRates.gasUnitRate}`
+                      : ""}{" "}
+                    ({baselineSourceLabel(monthlyContext.baselineSource)})
                   </p>
                 </div>
 
@@ -544,6 +525,12 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                   />
                 </div>
 
+                {utilityRateError ? (
+                  <div className="md:col-span-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                    {utilityRateError}. Configure utility rates under Properties → Utility rates.
+                  </div>
+                ) : null}
+
                 {monthlyContext.breakdown ? (
                   <RentBreakdownPanel breakdown={monthlyContext.breakdown} />
                 ) : null}
@@ -559,137 +546,13 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
             >
               Record rent
             </button>
-            {editingRent && !editingRent.isActive ? (
+            {editingRent ? (
               <button
                 type="button"
                 className={buttonSecondaryClass}
                 onClick={() => {
                   setEditingRent(null);
                   setMonthlyForm(emptyMonthlyForm);
-                }}
-              >
-                Cancel
-              </button>
-            ) : null}
-          </div>
-        </form>
-      ) : null}
-
-      {(grants.canCreate || grants.canUpdate) &&
-      (formMode === "lease" || (editingRent?.isActive ?? false)) ? (
-        <form
-          onSubmit={handleLeaseSubmit}
-          className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-6"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-medium">
-              {editingRent ? "Edit lease period" : "Add yearly lease period"}
-            </h2>
-            {!editingRent ? (
-              <button
-                type="button"
-                className={buttonSecondaryClass}
-                onClick={() => {
-                  setFormMode("monthly");
-                  setLeaseForm(emptyLeaseForm);
-                }}
-              >
-                Back to monthly rent
-              </button>
-            ) : null}
-          </div>
-
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm text-slate-300">Tenant name</label>
-              <select
-                required
-                value={leaseForm.tenantId}
-                onChange={(e) => setLeaseForm({ ...leaseForm, tenantId: e.target.value })}
-                className={inputClass}
-              >
-                <option value="">Select tenant...</option>
-                {tenants.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {tenantName(t)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-300">Unit</label>
-              <select
-                required
-                value={leaseForm.unitId}
-                onChange={(e) => setLeaseForm({ ...leaseForm, unitId: e.target.value })}
-                className={inputClass}
-              >
-                <option value="">Select unit...</option>
-                {units.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.unitNumber}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <DatePickerField
-              label="From"
-              required
-              value={leaseForm.startDate}
-              allowPastValue={editingStartDate}
-              onChange={(startDate) => setLeaseForm({ ...leaseForm, startDate })}
-            />
-            <DatePickerField
-              label="To"
-              value={leaseForm.endDate}
-              allowPastValue={editingEndDate}
-              onChange={(endDate) => setLeaseForm({ ...leaseForm, endDate })}
-            />
-            <div>
-              <label className="mb-1 block text-sm text-slate-300">Monthly rent</label>
-              <input
-                type="number"
-                required
-                min="0"
-                step="0.01"
-                value={leaseForm.rent}
-                onChange={(e) => setLeaseForm({ ...leaseForm, rent: e.target.value })}
-                className={inputClass}
-              />
-            </div>
-            <DatePickerField
-              label="Due date"
-              required
-              value={leaseForm.dueDate}
-              allowPastValue={editingDueDate}
-              onChange={(dueDate) => setLeaseForm({ ...leaseForm, dueDate })}
-            />
-            <div className="flex items-center gap-2 md:col-span-2">
-              <input
-                id="lease-active"
-                type="checkbox"
-                checked={leaseForm.isActive}
-                onChange={(e) => setLeaseForm({ ...leaseForm, isActive: e.target.checked })}
-                className="h-4 w-4 rounded border-slate-600 bg-slate-800"
-              />
-              <label htmlFor="lease-active" className="text-sm text-slate-300">
-                Active lease period (deactivates other rows for this tenant and unit)
-              </label>
-            </div>
-          </div>
-
-          <div className="mt-4 flex gap-3">
-            <button type="submit" className={buttonPrimaryClass}>
-              {editingRent ? "Update" : "Create lease"}
-            </button>
-            {editingRent || formMode === "lease" ? (
-              <button
-                type="button"
-                className={buttonSecondaryClass}
-                onClick={() => {
-                  setEditingRent(null);
-                  setFormMode("monthly");
-                  setLeaseForm(emptyLeaseForm);
                 }}
               >
                 Cancel
@@ -714,36 +577,36 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
               <th className="px-4 py-3">Maint.</th>
               <th className="px-4 py-3">Misc</th>
               <th className="px-4 py-3">Due</th>
-              <th className="px-4 py-3">Active</th>
               <th className="px-4 py-3">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={13} className="px-4 py-8 text-slate-400">
+                <td colSpan={12} className="px-4 py-8 text-slate-400">
                   Loading...
                 </td>
               </tr>
             ) : displayedRents.length === 0 ? (
               <tr>
-                <td colSpan={13} className="px-4 py-8 text-slate-400">
+                <td colSpan={12} className="px-4 py-8 text-slate-400">
                   No rent records yet.
                 </td>
               </tr>
             ) : (
               displayedRents.map((row) => {
-                const tenantDetail = tenants.find((t) => t.id === row.tenant.id);
-                const tenantMonthlyBills = allRents.filter(
-                  (bill) => bill.tenant.id === row.tenant.id && !bill.isActive,
+                const assignmentDetail = assignments.find(
+                  (assignment) => assignment.id === row.tenantAssignmentId,
                 );
-                const savedBreakdown =
-                  !row.isActive && tenantDetail
-                    ? breakdownFromRentRow(row, {
-                        tenant: tenantDetail,
-                        monthlyBills: tenantMonthlyBills,
-                      })
-                    : null;
+                const tenantMonthlyBills = allRents.filter(
+                  (bill) => bill.tenant.id === row.tenant.id,
+                );
+                const savedBreakdown = assignmentDetail
+                  ? breakdownFromRentRow(row, {
+                      assignment: assignmentDetail,
+                      monthlyBills: tenantMonthlyBills,
+                    })
+                  : null;
                 const isViewing = viewingRentId === row.id;
 
                 return (
@@ -760,10 +623,9 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                       <td className="px-4 py-3">{row.maintenance ?? "—"}</td>
                       <td className="px-4 py-3">{row.misc ?? "—"}</td>
                       <td className="px-4 py-3">{formatDate(row.dueDate)}</td>
-                      <td className="px-4 py-3">{row.isActive ? "Yes" : "No"}</td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap items-center gap-2">
-                          {!row.isActive && savedBreakdown ? (
+                          {savedBreakdown ? (
                             <button
                               type="button"
                               className={buttonSecondaryClass}
@@ -778,35 +640,13 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                             canUpdate={grants.canUpdate}
                             canDelete={grants.canDelete}
                             onEdit={() => {
-                              if (row.isActive) {
-                                setEditingRent(row);
-                                setFormMode("lease");
-                                setViewingRentId(null);
-                                setLeaseForm({
-                                  tenantId: row.tenant.id,
-                                  unitId: row.unit.id,
-                                  startDate: formatDate(row.startDate),
-                                  endDate: row.endDate ? formatDate(row.endDate) : "",
-                                  rent: String(row.rent),
-                                  electricityUnits: row.electricityUnits
-                                    ? String(row.electricityUnits)
-                                    : "",
-                                  gasUnits: row.gasUnits ? String(row.gasUnits) : "",
-                                  maintenance: row.maintenance ? String(row.maintenance) : "",
-                                  misc: row.misc ? String(row.misc) : "",
-                                  dueDate: formatDate(row.dueDate),
-                                  isActive: row.isActive,
-                                });
-                                return;
-                              }
-
                               setEditingRent(row);
-                              setFormMode("monthly");
                               setViewingRentId(null);
+                              const startDate = formatDate(row.startDate);
                               setMonthlyForm({
                                 tenantId: row.tenant.id,
-                                startDate: formatDate(row.startDate),
-                                endDate: row.endDate ? formatDate(row.endDate) : "",
+                                startDate,
+                                endDate: calcMonthlyPeriodEnd(startDate),
                                 electricityUnits: row.electricityUnits
                                   ? String(row.electricityUnits)
                                   : "",
@@ -833,7 +673,7 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                     </tr>
                     {isViewing && savedBreakdown ? (
                       <tr key={`${row.id}-breakdown`} className="border-t border-slate-800 bg-slate-950/40">
-                        <td colSpan={13} className="px-4 py-4">
+                        <td colSpan={12} className="px-4 py-4">
                           <RentBreakdownPanel breakdown={savedBreakdown} />
                         </td>
                       </tr>

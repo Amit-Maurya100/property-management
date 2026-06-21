@@ -44,6 +44,7 @@ model User {
   loginAudits  LoginAudit[]
   properties   Property[]   @relation("PropertyOwner")
   tenants      Tenant[]     @relation("TenantOwner")
+  organizations Organization?
 
   @@index([username], map: "idx_users_username")
   @@index([email], map: "idx_users_email")
@@ -276,6 +277,24 @@ enum AvailabilityStatus {
   @@map("availability_status")
 }
 
+enum PaymentMode {
+  CASH
+  CHEQUE
+  NEFT
+  UPI
+  OTHER
+
+  @@map("payment_mode")
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+
+  @@map("payment_status")
+}
+
 model Address {
   id        BigInt   @id @default(autoincrement())
   uuid      String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -291,6 +310,7 @@ model Address {
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   property Property?
+  organization Organization?
 
   @@map("addresses")
 }
@@ -367,9 +387,35 @@ model Building {
 
   property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
   floors   Floor[]
+  utilityRates BuildingUtilityRate[]
 
   @@index([propertyId], map: "idx_buildings_property_id")
   @@map("buildings")
+}
+
+enum BuildingUtilityType {
+  ELECTRICITY
+  GAS
+  CLEANING
+
+  @@map("building_utility_type")
+}
+
+model BuildingUtilityRate {
+  id           BigInt              @id @default(autoincrement())
+  uuid         String              @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  buildingId   BigInt              @map("building_id")
+  utilityType  BuildingUtilityType @map("utility_type")
+  unitRate     Decimal             @map("unit_rate") @db.Decimal(12, 2)
+  startDate    DateTime            @map("start_date") @db.Date
+  endDate      DateTime            @map("end_date") @db.Date
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+
+  @@index([buildingId, utilityType, startDate, endDate], map: "idx_building_utility_rates_lookup")
+  @@map("building_utility_rates")
 }
 
 model Floor {
@@ -405,6 +451,7 @@ model Unit {
   availabilities Availability[]
   rents          Rent[]
   tenants        Tenant[]
+  tenantAssignments TenantAssignment[]
 
   @@unique([floorId, unitNumber], map: "unique_floor_unit_number")
   @@index([floorId], map: "idx_units_floor_id")
@@ -478,17 +525,38 @@ model Availability {
 }
 
 model Tenant {
+  id         BigInt   @id @default(autoincrement())
+  uuid       String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId    BigInt   @map("owner_id")
+  unitId     BigInt?  @map("unit_id")
+  firstName  String   @map("first_name") @db.VarChar(100)
+  lastName   String   @map("last_name") @db.VarChar(100)
+  email      String?  @db.VarChar(255)
+  phone      String?  @db.VarChar(30)
+  idDocument String?  @map("id_document") @db.VarChar(100)
+  pictureUrl String?  @map("picture_url") @db.VarChar(2048)
+  advanceBalance Decimal @default(0) @map("advance_balance") @db.Decimal(12, 2)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  owner        User               @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  unit         Unit?              @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  assignments  TenantAssignment[]
+  rents        Rent[]
+  payments     Payment[]
+
+  @@index([ownerId], map: "idx_tenants_owner_id")
+  @@index([unitId], map: "idx_tenants_unit_id")
+  @@index([email], map: "idx_tenants_email")
+  @@map("tenants")
+}
+
+model TenantAssignment {
   id                      BigInt    @id @default(autoincrement())
   uuid                    String    @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  ownerId                 BigInt    @map("owner_id")
-  unitId                  BigInt?   @map("unit_id")
-  firstName               String    @map("first_name") @db.VarChar(100)
-  lastName                String    @map("last_name") @db.VarChar(100)
-  email                   String?   @db.VarChar(255)
-  phone                   String?   @db.VarChar(30)
-  idDocument              String?   @map("id_document") @db.VarChar(100)
-  pictureUrl              String?   @map("picture_url") @db.VarChar(2048)
-  initialRent             Decimal?  @map("initial_rent") @db.Decimal(12, 2)
+  tenantId                BigInt    @map("tenant_id")
+  unitId                  BigInt    @map("unit_id")
+  monthlyRent             Decimal?  @map("monthly_rent") @db.Decimal(12, 2)
   leaseFrom               DateTime? @map("lease_from") @db.Date
   leaseTo                 DateTime? @map("lease_to") @db.Date
   monthlyDueDay           Int?      @map("monthly_due_day")
@@ -499,41 +567,183 @@ model Tenant {
   createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt               DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  owner User   @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  unit  Unit?  @relation(fields: [unitId], references: [id], onDelete: SetNull)
-  rents Rent[]
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  rents  Rent[]
 
-  @@index([ownerId], map: "idx_tenants_owner_id")
-  @@index([unitId], map: "idx_tenants_unit_id")
-  @@index([email], map: "idx_tenants_email")
-  @@map("tenants")
+  @@index([tenantId], map: "idx_tenant_assignments_tenant_id")
+  @@index([unitId], map: "idx_tenant_assignments_unit_id")
+  @@index([isActive], map: "idx_tenant_assignments_is_active")
+  @@map("tenant_assignments")
 }
 
 model Rent {
-  id               BigInt    @id @default(autoincrement())
-  uuid             String    @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId         BigInt    @map("tenant_id")
-  unitId           BigInt    @map("unit_id")
-  startDate        DateTime  @map("start_date") @db.Date
-  endDate          DateTime? @map("end_date") @db.Date
-  rent             Decimal   @db.Decimal(12, 2)
-  totalRent        Decimal?  @map("total_rent") @db.Decimal(12, 2)
-  electricityUnits Decimal?  @map("electricity_units") @db.Decimal(10, 2)
-  gasUnits         Decimal?  @map("gas_units") @db.Decimal(10, 2)
-  maintenance      Decimal?  @db.Decimal(12, 2)
-  misc             Decimal?  @db.Decimal(12, 2)
-  dueDate          DateTime  @map("due_date") @db.Date
-  utilityBaseline  Json?     @map("utility_baseline")
-  isActive         Boolean   @default(true) @map("is_active")
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  id                  BigInt    @id @default(autoincrement())
+  uuid                String    @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            BigInt    @map("tenant_id")
+  tenantAssignmentId  BigInt    @map("tenant_assignment_id")
+  unitId              BigInt    @map("unit_id")
+  startDate           DateTime  @map("start_date") @db.Date
+  endDate             DateTime? @map("end_date") @db.Date
+  rent                Decimal   @db.Decimal(12, 2)
+  totalRent           Decimal?  @map("total_rent") @db.Decimal(12, 2)
+  electricityUnits    Decimal?  @map("electricity_units") @db.Decimal(10, 2)
+  gasUnits            Decimal?  @map("gas_units") @db.Decimal(10, 2)
+  maintenance         Decimal?  @db.Decimal(12, 2)
+  misc                Decimal?  @db.Decimal(12, 2)
+  dueDate             DateTime      @map("due_date") @db.Date
+  utilityBaseline     Json?         @map("utility_baseline")
+  utilityRateSnapshot Json?         @map("utility_rate_snapshot")
+  priorBalance        Decimal       @default(0) @map("prior_balance") @db.Decimal(12, 2)
+  balanceCarriedForward Boolean     @default(false) @map("balance_carried_forward")
+  paymentStatus       PaymentStatus @default(PENDING) @map("payment_status")
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  tenantAssignment TenantAssignment @relation(fields: [tenantAssignmentId], references: [id], onDelete: Restrict)
+  unit             Unit             @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  payments         Payment[]
 
   @@index([tenantId], map: "idx_rents_tenant_id")
+  @@index([tenantAssignmentId], map: "idx_rents_tenant_assignment_id")
   @@index([unitId], map: "idx_rents_unit_id")
   @@index([dueDate], map: "idx_rents_due_date")
-  @@index([isActive], map: "idx_rents_is_active")
+  @@index([paymentStatus], map: "idx_rents_payment_status")
   @@map("rents")
+}
+
+model Payment {
+  id            BigInt      @id @default(autoincrement())
+  uuid          String      @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  rentId        BigInt      @map("rent_id")
+  tenantId      BigInt      @map("tenant_id")
+  amount        Decimal     @db.Decimal(12, 2)
+  mode          PaymentMode
+  appliedToRent Decimal     @map("applied_to_rent") @db.Decimal(12, 2)
+  toAdvance     Decimal     @default(0) @map("to_advance") @db.Decimal(12, 2)
+  paidAt        DateTime    @default(now()) @map("paid_at") @db.Date
+  notes         String?
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  rent   Rent   @relation(fields: [rentId], references: [id], onDelete: Restrict)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([rentId], map: "idx_payments_rent_id")
+  @@index([tenantId], map: "idx_payments_tenant_id")
+  @@index([paidAt], map: "idx_payments_paid_at")
+  @@map("payments")
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  INACTIVE
+  PENDING
+  SUSPENDED
+
+  @@map("organization_status")
+}
+
+enum GstInvoiceType {
+  B2B_SALE
+  B2C_SALE
+  PURCHASE
+
+  @@map("gst_invoice_type")
+}
+
+model Organization {
+  id               BigInt             @id @default(autoincrement())
+  uuid             String             @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId          BigInt             @unique @map("owner_id")
+  name             String             @db.VarChar(255)
+  addressId        BigInt             @unique @map("address_id")
+  gstNumber        String             @map("gst_number") @db.VarChar(15)
+  ownerName        String             @map("owner_name") @db.VarChar(255)
+  registrationDate DateTime           @map("registration_date") @db.Date
+  currentStatus    OrganizationStatus @default(ACTIVE) @map("current_status")
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  owner    User         @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  address  Address      @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  invoices GstInvoice[]
+  taxConfigurations GstTaxConfiguration[]
+  gstMasters GstMaster[]
+
+  @@index([gstNumber], map: "idx_organizations_gst_number")
+  @@map("organizations")
+}
+
+model GstTaxConfiguration {
+  id             BigInt   @id @default(autoincrement())
+  uuid           String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId BigInt   @map("organization_id")
+  cgstRate       Decimal  @map("cgst_rate") @db.Decimal(5, 2)
+  sgstRate       Decimal  @map("sgst_rate") @db.Decimal(5, 2)
+  igstRate       Decimal  @map("igst_rate") @db.Decimal(5, 2)
+  startDate      DateTime @map("start_date") @db.Date
+  endDate        DateTime @map("end_date") @db.Date
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, startDate, endDate], map: "idx_gst_tax_config_org_dates")
+  @@map("gst_tax_configurations")
+}
+
+model GstInvoice {
+  id              BigInt         @id @default(autoincrement())
+  uuid            String         @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  BigInt         @map("organization_id")
+  invoiceType     GstInvoiceType @map("invoice_type")
+  invoiceNumber   String         @map("invoice_number") @db.VarChar(100)
+  invoiceDate     DateTime       @map("invoice_date") @db.Date
+  gstNumber       String?        @map("gst_number") @db.VarChar(15)
+  tradeName       String?        @map("trade_name") @db.VarChar(255)
+  customerName    String?        @map("customer_name") @db.VarChar(255)
+  customerAddress String?        @map("customer_address")
+  taxableValue    Decimal        @map("taxable_value") @db.Decimal(12, 2)
+  cgst            Decimal        @default(0) @db.Decimal(12, 2)
+  sgst            Decimal        @default(0) @db.Decimal(12, 2)
+  igst            Decimal        @default(0) @db.Decimal(12, 2)
+  cess            Decimal        @default(0) @db.Decimal(12, 2)
+  totalTaxAmount  Decimal        @map("total_tax_amount") @db.Decimal(12, 2)
+  invoiceValue    Decimal        @map("invoice_value") @db.Decimal(12, 2)
+  description     String?
+  paymentStatus   PaymentStatus  @default(PENDING) @map("payment_status")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, invoiceType, invoiceNumber], map: "unique_org_type_invoice_number")
+  @@index([organizationId, invoiceType], map: "idx_gst_invoices_org_type")
+  @@index([invoiceDate], map: "idx_gst_invoices_date")
+  @@map("gst_invoices")
+}
+
+model GstMaster {
+  id                        BigInt   @id @default(autoincrement())
+  uuid                      String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId            BigInt   @map("organization_id")
+  gstNumber                 String   @map("gst_number") @db.VarChar(15)
+  legalName                 String   @map("legal_name") @db.VarChar(255)
+  tradeName                 String   @map("trade_name") @db.VarChar(255)
+  effectiveRegistrationDate DateTime @map("effective_registration_date") @db.Date
+  constitutionOfBusiness    String   @map("constitution_of_business") @db.VarChar(100)
+  gstinStatus               String   @map("gstin_status") @db.VarChar(50)
+  taxpayerType              String   @map("taxpayer_type") @db.VarChar(50)
+  principalPlaceOfBusiness  String   @map("principal_place_of_business")
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt                 DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, gstNumber], map: "unique_org_gst_master_number")
+  @@index([organizationId], map: "idx_gst_masters_org")
+  @@index([gstNumber], map: "idx_gst_masters_gst_number")
+  @@map("gst_masters")
 }

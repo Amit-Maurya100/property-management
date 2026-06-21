@@ -7,6 +7,7 @@ import {
   assertUserOwnsUnit,
   ownerTenantFilter,
 } from "@/lib/properties/ownership";
+import { assignmentSelect } from "@/lib/properties/tenant-assignments";
 
 const tenantSelect = {
   id: true,
@@ -17,14 +18,6 @@ const tenantSelect = {
   phone: true,
   idDocument: true,
   pictureUrl: true,
-  initialRent: true,
-  leaseFrom: true,
-  leaseTo: true,
-  monthlyDueDay: true,
-  initialGasUnits: true,
-  initialElectricityUnits: true,
-  isActive: true,
-  notes: true,
   createdAt: true,
   updatedAt: true,
   unit: {
@@ -40,8 +33,17 @@ const tenantSelect = {
       },
     },
   },
-  _count: { select: { rents: true } },
-} as const;
+  assignments: {
+    where: { isActive: true },
+    take: 1,
+    orderBy: [
+      { createdAt: Prisma.SortOrder.desc },
+      { id: Prisma.SortOrder.desc },
+    ],
+    select: assignmentSelect,
+  },
+  _count: { select: { rents: true, assignments: true } },
+} as const satisfies Prisma.TenantSelect;
 
 type TenantInput = {
   firstName: string;
@@ -51,14 +53,6 @@ type TenantInput = {
   idDocument?: string;
   unitId?: bigint;
   pictureUrl?: string;
-  initialRent?: number;
-  leaseFrom?: Date;
-  leaseTo?: Date;
-  monthlyDueDay?: number;
-  initialGasUnits?: number;
-  initialElectricityUnits?: number;
-  isActive?: boolean;
-  notes?: string;
 };
 
 type TenantUpdateInput = Partial<Omit<TenantInput, "unitId">> & {
@@ -67,13 +61,6 @@ type TenantUpdateInput = Partial<Omit<TenantInput, "unitId">> & {
   idDocument?: string | null;
   unitId?: bigint | null;
   pictureUrl?: string | null;
-  initialRent?: number | null;
-  leaseFrom?: Date | null;
-  leaseTo?: Date | null;
-  monthlyDueDay?: number | null;
-  initialGasUnits?: number | null;
-  initialElectricityUnits?: number | null;
-  notes?: string | null;
 };
 
 function tenantCreateData(ctx: PropertyAccessContext, data: TenantInput) {
@@ -86,18 +73,6 @@ function tenantCreateData(ctx: PropertyAccessContext, data: TenantInput) {
     phone: data.phone || null,
     idDocument: data.idDocument || null,
     pictureUrl: data.pictureUrl || null,
-    initialRent: data.initialRent != null ? new Prisma.Decimal(data.initialRent) : null,
-    leaseFrom: data.leaseFrom ?? null,
-    leaseTo: data.leaseTo ?? null,
-    monthlyDueDay: data.monthlyDueDay ?? null,
-    initialGasUnits:
-      data.initialGasUnits != null ? new Prisma.Decimal(data.initialGasUnits) : null,
-    initialElectricityUnits:
-      data.initialElectricityUnits != null
-        ? new Prisma.Decimal(data.initialElectricityUnits)
-        : null,
-    isActive: data.isActive ?? true,
-    notes: data.notes || null,
   };
 }
 
@@ -110,21 +85,6 @@ function tenantUpdateData(data: TenantUpdateInput) {
     idDocument: data.idDocument,
     unitId: data.unitId,
     pictureUrl: data.pictureUrl,
-    initialRent:
-      data.initialRent != null ? new Prisma.Decimal(data.initialRent) : data.initialRent,
-    leaseFrom: data.leaseFrom,
-    leaseTo: data.leaseTo,
-    monthlyDueDay: data.monthlyDueDay,
-    initialGasUnits:
-      data.initialGasUnits != null
-        ? new Prisma.Decimal(data.initialGasUnits)
-        : data.initialGasUnits,
-    initialElectricityUnits:
-      data.initialElectricityUnits != null
-        ? new Prisma.Decimal(data.initialElectricityUnits)
-        : data.initialElectricityUnits,
-    isActive: data.isActive,
-    notes: data.notes,
   };
 }
 
@@ -179,9 +139,10 @@ export async function updateTenant(
 
 export async function deleteTenant(ctx: PropertyAccessContext, id: IdInput) {
   await assertUserOwnsTenant(ctx, id);
-  const rentCount = await prisma.rent.count({ where: { tenantId: parseId(id) } });
+  const tenantId = parseId(id);
+  const rentCount = await prisma.rent.count({ where: { tenantId } });
   if (rentCount > 0) {
-    throw new Error("BAD_REQUEST:Remove rent assignments before deleting this tenant");
+    throw new Error("BAD_REQUEST:Remove rent bills before deleting this tenant");
   }
-  await prisma.tenant.delete({ where: { id: parseId(id) } });
+  await prisma.tenant.delete({ where: { id: tenantId } });
 }

@@ -1,7 +1,5 @@
-import { BuildingsAdmin } from "@/components/properties/buildings-admin";
-import { requirePropertyPage } from "@/lib/properties/page-auth";
+import { redirect } from "next/navigation";
 
-export default async function BuildingsPage() {
-  const { grants } = await requirePropertyPage("building");
-  return <BuildingsAdmin grants={grants} />;
+export default function BuildingsPage() {
+  redirect("/properties?tab=buildings");
 }

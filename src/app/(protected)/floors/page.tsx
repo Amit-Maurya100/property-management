@@ -1,7 +1,5 @@
-import { FloorsAdmin } from "@/components/properties/floors-admin";
-import { requirePropertyPage } from "@/lib/properties/page-auth";
+import { redirect } from "next/navigation";
 
-export default async function FloorsPage() {
-  const { grants } = await requirePropertyPage("floor");
-  return <FloorsAdmin grants={grants} />;
+export default function FloorsPage() {
+  redirect("/properties?tab=floors");
 }

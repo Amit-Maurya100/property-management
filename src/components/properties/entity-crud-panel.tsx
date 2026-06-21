@@ -46,6 +46,7 @@ type EntityCrudPanelProps = {
   mapRowToForm: (row: Record<string, unknown>) => Record<string, string>;
   buildPayload: (form: Record<string, string>) => Record<string, unknown>;
   extraPanel?: React.ReactNode;
+  embedded?: boolean;
 };
 
 export function EntityCrudPanel({
@@ -60,12 +61,16 @@ export function EntityCrudPanel({
   mapRowToForm,
   buildPayload,
   extraPanel,
+  embedded = false,
 }: EntityCrudPanelProps) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
   const [form, setForm] = useState(getInitialForm);
+  const [showForm, setShowForm] = useState(false);
+
+  const singularLabel = title.endsWith("s") ? title.slice(0, -1) : title;
 
   const queryString = buildQuery
     ? buildQuery(
@@ -98,6 +103,19 @@ export function EntityCrudPanel({
   function resetForm() {
     setEditing(null);
     setForm(getInitialForm());
+    setShowForm(false);
+  }
+
+  function openCreateForm() {
+    setEditing(null);
+    setForm(getInitialForm());
+    setShowForm(true);
+  }
+
+  function openEditForm(row: Record<string, unknown>) {
+    setEditing(row);
+    setForm(mapRowToForm(row));
+    setShowForm(true);
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -132,10 +150,14 @@ export function EntityCrudPanel({
 
   return (
     <div>
-      <h1 className="text-3xl font-semibold">{title}</h1>
+      {embedded ? (
+        <h2 className="text-lg font-medium text-slate-200">{title}</h2>
+      ) : (
+        <h1 className="text-3xl font-semibold">{title}</h1>
+      )}
 
       {filters.length > 0 ? (
-        <div className="mt-6 flex flex-wrap gap-3">
+        <div className={embedded ? "mt-4 flex flex-wrap gap-3" : "mt-6 flex flex-wrap gap-3"}>
           {filters.map((filter) => (
             <div key={filter.key}>
               <label className="mb-1 block text-xs text-slate-400">{filter.label}</label>
@@ -156,13 +178,25 @@ export function EntityCrudPanel({
         </div>
       ) : null}
 
-      {grants.canCreate || grants.canUpdate ? (
+      {grants.canCreate && !showForm ? (
+        <div className={embedded ? "mt-4" : "mt-6"}>
+          <button type="button" onClick={openCreateForm} className={buttonPrimaryClass}>
+            Add {singularLabel}
+          </button>
+        </div>
+      ) : null}
+
+      {showForm && (grants.canCreate || grants.canUpdate) ? (
         <form
           onSubmit={handleSubmit}
-          className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-6"
+          className={
+            embedded
+              ? "mt-4 rounded-2xl border border-slate-800 bg-slate-900 p-6"
+              : "mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-6"
+          }
         >
           <h2 className="text-lg font-medium">
-            {editing ? "Edit" : "Create"} {title.slice(0, -1)}
+            {editing ? "Edit" : "Create"} {singularLabel}
           </h2>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             {fields.map((field) => (
@@ -212,11 +246,9 @@ export function EntityCrudPanel({
             <button type="submit" className={buttonPrimaryClass}>
               {editing ? "Update" : "Create"}
             </button>
-            {editing ? (
-              <button type="button" onClick={resetForm} className={buttonSecondaryClass}>
-                Cancel
-              </button>
-            ) : null}
+            <button type="button" onClick={resetForm} className={buttonSecondaryClass}>
+              Cancel
+            </button>
           </div>
         </form>
       ) : null}
@@ -229,7 +261,7 @@ export function EntityCrudPanel({
         </p>
       ) : null}
 
-      <div className="mt-8 overflow-x-auto rounded-2xl border border-slate-800">
+      <div className={embedded ? "mt-4 overflow-x-auto rounded-2xl border border-slate-800" : "mt-8 overflow-x-auto rounded-2xl border border-slate-800"}>
         <table className="min-w-full text-sm">
           <thead className="bg-slate-900 text-left text-slate-400">
             <tr>
@@ -268,10 +300,7 @@ export function EntityCrudPanel({
                     <RowActions
                       canUpdate={grants.canUpdate}
                       canDelete={grants.canDelete}
-                      onEdit={() => {
-                        setEditing(row);
-                        setForm(mapRowToForm(row));
-                      }}
+                      onEdit={() => openEditForm(row)}
                       onDelete={() => void handleDelete(row)}
                     />
                   </td>

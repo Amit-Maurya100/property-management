@@ -1,5 +1,4 @@
-export const ELECTRICITY_UNIT_RATE = 10;
-export const GAS_UNIT_RATE = 50;
+import type { BuildingUtilityRateSnapshot } from "@/lib/properties/building-utility-types";
 
 export function toNumber(value: string | number | null | undefined) {
   if (value == null || value === "") return 0;
@@ -8,7 +7,29 @@ export function toNumber(value: string | number | null | undefined) {
 }
 
 export function formatIsoDate(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function parseIsoDateLocal(iso: string) {
+  const [year, month, day] = iso.slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+/** End of a monthly rent period: same day next month minus one day. */
+export function calcMonthlyPeriodEnd(fromDateIso: string) {
+  const from = parseIsoDateLocal(fromDateIso);
+  const end = new Date(from.getFullYear(), from.getMonth() + 1, from.getDate() - 1);
+  return formatIsoDate(end);
+}
+
+/** Due date = period start (From) plus configured days from tenant. */
+export function calcDueDateFromPeriodStart(fromDateIso: string, daysAfterStart: number) {
+  const from = parseIsoDateLocal(fromDateIso);
+  from.setDate(from.getDate() + daysAfterStart);
+  return formatIsoDate(from);
 }
 
 export function lastDayOfMonth(reference = new Date()) {
@@ -32,8 +53,18 @@ export function parseUtilityBaseline(value: unknown): UtilityBaseline | null {
   return { electricityUnits, gasUnits };
 }
 
+export function parseUtilityRateSnapshot(value: unknown): BuildingUtilityRateSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    electricityUnitRate: toNumber(record.electricityUnitRate as string | number | null | undefined),
+    gasUnitRate: toNumber(record.gasUnitRate as string | number | null | undefined),
+    cleaningCharge: toNumber(record.cleaningCharge as string | number | null | undefined),
+  };
+}
+
 export function resolveUtilityBaselines(params: {
-  tenant: {
+  assignment: {
     initialElectricityUnits?: string | number | null;
     initialGasUnits?: string | number | null;
   };
@@ -45,10 +76,9 @@ export function resolveUtilityBaselines(params: {
     utilityBaseline?: unknown;
   }>;
   savedBaseline?: unknown;
-  /** When set, baseline comes from the bill immediately before this period (edit/view). */
   periodStartDate?: string;
   excludeRentId?: string;
-}): UtilityBaseline & { source: "stored" | "tenant" | "prior_bill" } {
+}): UtilityBaseline & { source: "stored" | "assignment" | "prior_bill" } {
   const stored = parseUtilityBaseline(params.savedBaseline);
   if (stored) {
     return { ...stored, source: "stored" };
@@ -75,20 +105,20 @@ export function resolveUtilityBaselines(params: {
 
   return {
     electricityUnits:
-      params.tenant.initialElectricityUnits != null
-        ? toNumber(params.tenant.initialElectricityUnits)
+      params.assignment.initialElectricityUnits != null
+        ? toNumber(params.assignment.initialElectricityUnits)
         : 0,
     gasUnits:
-      params.tenant.initialGasUnits != null
-        ? toNumber(params.tenant.initialGasUnits)
+      params.assignment.initialGasUnits != null
+        ? toNumber(params.assignment.initialGasUnits)
         : 0,
-    source: "tenant",
+    source: "assignment",
   };
 }
 
 /** @deprecated Use resolveUtilityBaselines */
 export function resolveLiveUtilityBaselines(input: {
-  tenant: {
+  assignment: {
     initialElectricityUnits?: string | number | null;
     initialGasUnits?: string | number | null;
   };
@@ -98,7 +128,7 @@ export function resolveLiveUtilityBaselines(input: {
   }>;
 }) {
   const resolved = resolveUtilityBaselines({
-    tenant: input.tenant,
+    assignment: input.assignment,
     monthlyBills: input.previousBills.map((bill) => ({
       startDate: "",
       ...bill,
@@ -116,31 +146,8 @@ export function firstDayOfMonth(reference = new Date()) {
   return `${year}-${month}-01`;
 }
 
-export function calcDueDate(monthlyDueDay: number, reference = new Date()) {
-  const year = reference.getFullYear();
-  const month = reference.getMonth();
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  const day = Math.min(monthlyDueDay, lastDay);
-  let due = new Date(year, month, day);
-
-  const today = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate());
-  if (due < today) {
-    const nextMonth = month + 1;
-    const nextYear = nextMonth > 11 ? year + 1 : year;
-    const nextMonthIndex = nextMonth % 12;
-    const nextLastDay = new Date(nextYear, nextMonthIndex + 1, 0).getDate();
-    due = new Date(nextYear, nextMonthIndex, Math.min(monthlyDueDay, nextLastDay));
-  }
-
-  return formatIsoDate(due);
-}
-
-export function isAgreementOver(
-  rentTo: string | null | undefined,
-  leaseTo: string | null | undefined,
-) {
-  if (!rentTo || !leaseTo) return false;
-  return new Date(rentTo) > new Date(leaseTo);
+export function calcDueDate(monthlyDueDay: number, fromDateIso: string) {
+  return calcDueDateFromPeriodStart(fromDateIso, monthlyDueDay);
 }
 
 export function calcRentBreakdown(input: {
@@ -151,29 +158,40 @@ export function calcRentBreakdown(input: {
   baselineGasUnits: number;
   maintenance: number;
   misc: number;
+  rates: BuildingUtilityRateSnapshot;
 }) {
   const electricityDelta = Math.max(
     0,
     input.electricityUnits - input.baselineElectricityUnits,
   );
   const gasDelta = Math.max(0, input.gasUnits - input.baselineGasUnits);
-  const electricityCharge = electricityDelta * ELECTRICITY_UNIT_RATE;
-  const gasCharge = gasDelta * GAS_UNIT_RATE;
+  const electricityCharge = electricityDelta * input.rates.electricityUnitRate;
+  const gasCharge = gasDelta * input.rates.gasUnitRate;
+  const cleaningCharge = input.rates.cleaningCharge;
   const total =
-    input.monthlyRent + electricityCharge + gasCharge + input.maintenance + input.misc;
+    input.monthlyRent +
+    electricityCharge +
+    gasCharge +
+    cleaningCharge +
+    input.maintenance +
+    input.misc;
 
   return {
     monthlyRent: input.monthlyRent,
     electricityUnits: input.electricityUnits,
     electricityBaseline: input.baselineElectricityUnits,
     electricityDelta,
+    electricityUnitRate: input.rates.electricityUnitRate,
     electricityCharge,
     gasUnits: input.gasUnits,
     gasBaseline: input.baselineGasUnits,
     gasDelta,
+    gasUnitRate: input.rates.gasUnitRate,
     gasCharge,
+    cleaningCharge,
     maintenance: input.maintenance,
     misc: input.misc,
+    rates: input.rates,
     total,
   };
 }
@@ -186,6 +204,7 @@ export function calcTotalRent(input: {
   baselineGasUnits: number;
   maintenance: number;
   misc: number;
+  rates: BuildingUtilityRateSnapshot;
 }) {
   return calcRentBreakdown(input).total;
 }
@@ -204,9 +223,10 @@ export function breakdownFromRentRow(
     maintenance?: string | number | null;
     misc?: string | number | null;
     utilityBaseline?: unknown;
+    utilityRateSnapshot?: unknown;
   },
   context?: {
-    tenant: {
+    assignment: {
       initialElectricityUnits?: string | number | null;
       initialGasUnits?: string | number | null;
     };
@@ -217,11 +237,12 @@ export function breakdownFromRentRow(
       gasUnits?: string | number | null;
       utilityBaseline?: unknown;
     }>;
+    rates?: BuildingUtilityRateSnapshot;
   },
 ) {
   const baseline = context
     ? resolveUtilityBaselines({
-        tenant: context.tenant,
+        assignment: context.assignment,
         monthlyBills: context.monthlyBills,
         savedBaseline: row.utilityBaseline,
         periodStartDate: row.startDate,
@@ -231,6 +252,9 @@ export function breakdownFromRentRow(
 
   if (!baseline) return null;
 
+  const rates = context?.rates ?? parseUtilityRateSnapshot(row.utilityRateSnapshot);
+  if (!rates) return null;
+
   return calcRentBreakdown({
     monthlyRent: toNumber(row.rent),
     electricityUnits: toNumber(row.electricityUnits),
@@ -239,5 +263,6 @@ export function breakdownFromRentRow(
     baselineGasUnits: baseline.gasUnits,
     maintenance: toNumber(row.maintenance),
     misc: toNumber(row.misc),
+    rates,
   });
 }

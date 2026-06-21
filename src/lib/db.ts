@@ -10,7 +10,14 @@ const globalForPrisma = globalThis as unknown as {
 function getPrismaSchemaFingerprint() {
   const models = [
     Prisma.TenantScalarFieldEnum,
+    Prisma.TenantAssignmentScalarFieldEnum,
     Prisma.RentScalarFieldEnum,
+    Prisma.PaymentScalarFieldEnum,
+    Prisma.OrganizationScalarFieldEnum,
+    Prisma.GstInvoiceScalarFieldEnum,
+    Prisma.GstTaxConfigurationScalarFieldEnum,
+    Prisma.GstMasterScalarFieldEnum,
+    Prisma.BuildingUtilityRateScalarFieldEnum,
   ] as const;
 
   return models
@@ -49,7 +56,14 @@ function isPrismaClientStale(client: PrismaClient) {
     !("property" in client) ||
     !("amenity" in client) ||
     !("tenant" in client) ||
-    !("rent" in client)
+    !("tenantAssignment" in client) ||
+    !("rent" in client) ||
+    !("payment" in client) ||
+    !("organization" in client) ||
+    !("gstInvoice" in client) ||
+    !("gstTaxConfiguration" in client) ||
+    !("gstMaster" in client) ||
+    !("buildingUtilityRate" in client)
   );
 }
 

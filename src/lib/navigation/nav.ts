@@ -1,39 +1,76 @@
 import type { Session } from "next-auth";
+import { filterAdminNavByPermissions } from "@/lib/admin/nav-items";
 import { getVisibleAdminNavItems } from "@/lib/admin/nav";
+import { getUserPermissionsFromDb } from "@/lib/permissions/db";
+import { getOrganizationForUser } from "@/lib/gst/organizations";
+import {
+  getAppNavItemsForSection,
+  type AppNavContext,
+  type AppNavItem,
+} from "@/lib/navigation/nav-client";
+import { GST_NAV_ITEMS } from "@/lib/navigation/gst-nav-items";
+import { PROPERTY_NAV_ITEMS } from "@/lib/navigation/property-nav-items";
+import {
+  getSectionForPath,
+  type HubSection,
+} from "@/lib/navigation/sections";
 
-export const PROPERTY_NAV_ITEMS = [
-  { href: "/properties", label: "Properties" },
-  { href: "/buildings", label: "Buildings" },
-  { href: "/floors", label: "Floors" },
-  { href: "/units", label: "Units" },
-  { href: "/rooms", label: "Rooms" },
-  { href: "/beds", label: "Beds" },
-  { href: "/amenities", label: "Amenities" },
-  { href: "/tenants", label: "Tenants" },
-  { href: "/rent", label: "Rent" },
-] as const;
+export { PROPERTY_NAV_ITEMS };
+export type { AppNavContext, AppNavItem, HubSection };
+export { getAppNavItemsForSection };
 
-export type AppNavItem = { href: string; label: string };
+function permissionKey(resource: string, action: string) {
+  return `${resource}:${action}`;
+}
+
+export async function getVisiblePropertyNavItems(userId: string) {
+  const rows = await getUserPermissionsFromDb(userId);
+  const granted = rows.map((row) => permissionKey(row.resource, row.action));
+  return filterAdminNavByPermissions(PROPERTY_NAV_ITEMS, granted);
+}
 
 export async function isCustomerUser(session: Session): Promise<boolean> {
   const roles = session.user?.roles ?? [];
   if (!roles.includes("customer")) return false;
-  const adminNav = await getVisibleAdminNavItems(session.user.id);
-  return adminNav.length === 0;
+  const hasSuperAdmin = roles.includes("super_admin");
+  const hasAdmin = roles.includes("admin");
+  return !hasSuperAdmin && !hasAdmin;
 }
 
-export async function getAppNavItems(session: Session): Promise<AppNavItem[]> {
-  const adminNavItems = await getVisibleAdminNavItems(session.user.id);
-  const propertyTabs = [...PROPERTY_NAV_ITEMS];
+export async function getVisibleGstNavItems(userId: string) {
+  const organization = await getOrganizationForUser(BigInt(userId));
+  if (!organization) return [];
 
-  if (await isCustomerUser(session)) {
-    return propertyTabs;
-  }
-
-  return [{ href: "/dashboard", label: "Dashboard" }, ...adminNavItems, ...propertyTabs];
+  const rows = await getUserPermissionsFromDb(userId);
+  const granted = rows.map((row) => permissionKey(row.resource, row.action));
+  return filterAdminNavByPermissions(GST_NAV_ITEMS, granted);
 }
 
-export async function getDefaultHomePath(session: Session): Promise<string> {
-  if (await isCustomerUser(session)) return "/properties";
+export async function getAppNavContext(session: Session): Promise<AppNavContext> {
+  const [adminNavItems, propertyNavItems, gstNavItems] = await Promise.all([
+    getVisibleAdminNavItems(session.user.id),
+    getVisiblePropertyNavItems(session.user.id),
+    getVisibleGstNavItems(session.user.id),
+  ]);
+
+  return {
+    homeHref: "/dashboard",
+    adminItems: adminNavItems.map(({ href, label }) => ({ href, label })),
+    propertyItems: propertyNavItems.map(({ href, label }) => ({ href, label })),
+    gstItems: gstNavItems.map(({ href, label }) => ({ href, label })),
+  };
+}
+
+export async function getAppNavItems(
+  session: Session,
+  pathname: string,
+): Promise<AppNavItem[]> {
+  const context = await getAppNavContext(session);
+  return getAppNavItemsForSection(context, getSectionForPath(pathname));
+}
+
+export async function getDefaultHomePath(_session: Session): Promise<string> {
   return "/dashboard";
 }
+
+export { getVisibleAdminNavItems };

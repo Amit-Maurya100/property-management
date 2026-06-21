@@ -143,7 +143,18 @@ export const createTenantSchema = z.object({
   idDocument: trimmedString.max(100).optional(),
   unitId: idSchema.optional(),
   pictureUrl: trimmedString.max(2048).optional(),
-  initialRent: z.coerce.number().nonnegative().optional(),
+});
+
+export const updateTenantSchema = createTenantSchema
+  .extend({
+    unitId: z.union([idSchema, z.null()]).optional(),
+  })
+  .partial();
+
+export const createTenantAssignmentSchema = z.object({
+  tenantId: idSchema,
+  unitId: idSchema,
+  monthlyRent: z.coerce.number().nonnegative().optional(),
   leaseFrom: z.coerce.date().optional(),
   leaseTo: z.coerce.date().optional(),
   monthlyDueDay: z.coerce.number().int().min(1).max(31).optional(),
@@ -153,9 +164,41 @@ export const createTenantSchema = z.object({
   notes: trimmedString.max(2000).optional(),
 });
 
-export const updateTenantSchema = createTenantSchema
-  .extend({
-    unitId: z.union([idSchema, z.null()]).optional(),
+function emptyToNull(value: unknown) {
+  return value === "" || value === null || value === undefined ? null : value;
+}
+
+const nullableAssignmentDate = z.preprocess(
+  emptyToNull,
+  z.union([z.null(), z.coerce.date()]).optional(),
+);
+
+const nullableAssignmentNumber = z.preprocess(
+  emptyToNull,
+  z.union([z.null(), z.coerce.number().nonnegative()]).optional(),
+);
+
+const nullableAssignmentDueDay = z.preprocess(
+  emptyToNull,
+  z.union([z.null(), z.coerce.number().int().min(1).max(31)]).optional(),
+);
+
+const nullableAssignmentNotes = z.preprocess(
+  emptyToNull,
+  z.union([z.null(), trimmedString.max(2000)]).optional(),
+);
+
+export const updateTenantAssignmentSchema = z
+  .object({
+    unitId: idSchema.optional(),
+    monthlyRent: nullableAssignmentNumber,
+    leaseFrom: nullableAssignmentDate,
+    leaseTo: nullableAssignmentDate,
+    monthlyDueDay: nullableAssignmentDueDay,
+    initialGasUnits: nullableAssignmentNumber,
+    initialElectricityUnits: nullableAssignmentNumber,
+    isActive: z.boolean().optional(),
+    notes: nullableAssignmentNotes,
   })
   .partial();
 
@@ -164,9 +207,46 @@ export const utilityBaselineSchema = z.object({
   gasUnits: z.coerce.number().nonnegative(),
 });
 
+export const utilityRateSnapshotSchema = z.object({
+  electricityUnitRate: z.coerce.number().nonnegative(),
+  gasUnitRate: z.coerce.number().nonnegative(),
+  cleaningCharge: z.coerce.number().nonnegative(),
+});
+
+export const buildingUtilityTypeEnum = z.enum(["ELECTRICITY", "GAS", "CLEANING"]);
+
+const buildingUtilityRateBaseSchema = z.object({
+  buildingId: idSchema,
+  utilityType: buildingUtilityTypeEnum,
+  unitRate: z.coerce.number().nonnegative(),
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date(),
+});
+
+export const createBuildingUtilityRateSchema = buildingUtilityRateBaseSchema.refine(
+  (data) => data.endDate >= data.startDate,
+  {
+    message: "End date must be on or after start date",
+    path: ["endDate"],
+  },
+);
+
+export const updateBuildingUtilityRateSchema = buildingUtilityRateBaseSchema
+  .omit({ buildingId: true })
+  .partial()
+  .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" })
+  .refine(
+    (data) => data.startDate == null || data.endDate == null || data.endDate >= data.startDate,
+    {
+      message: "End date must be on or after start date",
+      path: ["endDate"],
+    },
+  );
+
 export const createRentSchema = z.object({
   tenantId: idSchema,
   unitId: idSchema,
+  tenantAssignmentId: idSchema.optional(),
   startDate: z.coerce.date(),
   endDate: z.coerce.date().optional(),
   rent: z.coerce.number().nonnegative(),
@@ -177,7 +257,17 @@ export const createRentSchema = z.object({
   misc: z.coerce.number().nonnegative().optional(),
   dueDate: z.coerce.date(),
   utilityBaseline: utilityBaselineSchema.optional(),
-  isActive: z.boolean().optional(),
+  utilityRateSnapshot: utilityRateSnapshotSchema.optional(),
 });
 
 export const updateRentSchema = createRentSchema.partial();
+
+export const paymentModeEnum = z.enum(["CASH", "CHEQUE", "NEFT", "UPI", "OTHER"]);
+
+export const createPaymentSchema = z.object({
+  rentId: idSchema,
+  amount: z.coerce.number().positive(),
+  mode: paymentModeEnum,
+  paidAt: z.coerce.date().optional(),
+  notes: trimmedString.max(2000).optional(),
+});

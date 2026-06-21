@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { getAppNavItems, getDefaultHomePath } from "@/lib/navigation/nav";
+import { getAppNavContext, getDefaultHomePath } from "@/lib/navigation/nav";
 import { AppHeader } from "@/components/layout/app-header";
 import { SiteFooter } from "@/components/layout/site-footer";
 import { redirect } from "next/navigation";
@@ -14,7 +14,7 @@ export default async function ProtectedLayout({
     redirect("/login");
   }
 
-  const navItems = await getAppNavItems(session);
+  const navContext = await getAppNavContext(session);
   const homeHref = await getDefaultHomePath(session);
 
   return (
@@ -22,7 +22,7 @@ export default async function ProtectedLayout({
       <AppHeader
         username={session.user.username}
         email={session.user.email ?? ""}
-        navItems={navItems}
+        navContext={navContext}
         homeHref={homeHref}
       />
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-8">{children}</main>

@@ -4,7 +4,13 @@ import { useEffect, useState } from "react";
 import { EntityCrudPanel } from "@/components/properties/entity-crud-panel";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
-export function FloorsAdmin({ grants }: { grants: ResourceGrants }) {
+export function FloorsAdmin({
+  grants,
+  embedded = false,
+}: {
+  grants: ResourceGrants;
+  embedded?: boolean;
+}) {
   const [buildings, setBuildings] = useState<{ id: string; name: string; property?: { name: string } }[]>([]);
   const [buildingId, setBuildingId] = useState("");
 
@@ -17,6 +23,7 @@ export function FloorsAdmin({ grants }: { grants: ResourceGrants }) {
   return (
     <EntityCrudPanel
       title="Floors"
+      embedded={embedded}
       apiPath="/api/floors"
       resource="floor"
       grants={grants}

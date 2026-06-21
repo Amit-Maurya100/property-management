@@ -1,9 +1,4 @@
-import {
-  ELECTRICITY_UNIT_RATE,
-  GAS_UNIT_RATE,
-  calcRentBreakdown,
-  formatMoney,
-} from "@/lib/properties/rent-calculations";
+import { calcRentBreakdown, formatMoney } from "@/lib/properties/rent-calculations";
 
 type RentBreakdown = ReturnType<typeof calcRentBreakdown>;
 
@@ -37,20 +32,21 @@ export function RentBreakdownPanel({ breakdown }: { breakdown: RentBreakdown }) 
           label="Electricity"
           detail={
             breakdown.electricityDelta > 0
-              ? `(${breakdown.electricityUnits} − ${breakdown.electricityBaseline}) units × ₹${ELECTRICITY_UNIT_RATE}`
+              ? `(${breakdown.electricityUnits} − ${breakdown.electricityBaseline}) units × ₹${breakdown.electricityUnitRate}`
               : `No extra usage above ${breakdown.electricityBaseline} units`
           }
           amount={breakdown.electricityCharge}
         />
         <LineItem
-          label="Gas"
+          label="Gas (LPG)"
           detail={
             breakdown.gasDelta > 0
-              ? `(${breakdown.gasUnits} − ${breakdown.gasBaseline}) units × ₹${GAS_UNIT_RATE}`
+              ? `(${breakdown.gasUnits} − ${breakdown.gasBaseline}) units × ₹${breakdown.gasUnitRate}`
               : `No extra usage above ${breakdown.gasBaseline} units`
           }
           amount={breakdown.gasCharge}
         />
+        <LineItem label="Cleaning charges" amount={breakdown.cleaningCharge} />
         <LineItem label="Maintenance" amount={breakdown.maintenance} />
         <LineItem label="Misc" amount={breakdown.misc} />
       </div>
