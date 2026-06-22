@@ -38,12 +38,24 @@ export const authConfig = {
         token.permissions = user.permissions;
         token.scopes = user.scopes;
         token.roles = user.roles;
+        delete token.invalidSession;
+      } else if (token.sub && !/^\d+$/.test(String(token.sub))) {
+        // Legacy session from before bigint user ids — force re-login.
+        token.invalidSession = true;
       }
       return token;
     },
     session({ session, token }) {
+      if (
+        token.invalidSession ||
+        !token.sub ||
+        !/^\d+$/.test(String(token.sub))
+      ) {
+        return { ...session, user: undefined, expires: "1970-01-01T00:00:00.000Z" };
+      }
+
       if (session.user) {
-        session.user.id = token.sub ?? "";
+        session.user.id = token.sub;
         session.user.username = (token.username as string) ?? "";
         session.user.permissions = (token.permissions as string[]) ?? [];
         session.user.scopes =

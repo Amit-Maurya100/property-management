@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 
 export default async function GstPurchasePage() {
   const { session, grants } = await requireGstPage("gst_purchase");
-  const organization = await getOrganizationForUser(BigInt(session.user.id));
+  const organization = await getOrganizationForUser(session.user.id);
   if (!organization) redirect("/hub/gst");
 
   return (
