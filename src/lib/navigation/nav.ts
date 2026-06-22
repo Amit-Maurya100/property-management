@@ -38,7 +38,7 @@ export async function isCustomerUser(session: Session): Promise<boolean> {
 }
 
 export async function getVisibleGstNavItems(userId: string) {
-  const organization = await getOrganizationForUser(BigInt(userId));
+  const organization = await getOrganizationForUser(userId);
   if (!organization) return [];
 
   const rows = await getUserPermissionsFromDb(userId);
