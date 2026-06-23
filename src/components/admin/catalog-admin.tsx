@@ -1,12 +1,14 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { RowActions } from "@/components/admin/row-actions";
+import { useCachedList } from "@/hooks/use-cached-list";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 type CatalogRow = {
@@ -32,9 +34,6 @@ export function CatalogAdmin({
   namePlaceholder,
   grants,
 }: CatalogAdminProps) {
-  const [items, setItems] = useState<CatalogRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<CatalogRow | null>(null);
   const [form, setForm] = useState({
     name: "",
@@ -42,23 +41,16 @@ export function CatalogAdmin({
     isActive: true,
   });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(apiPath);
-      if (!response.ok) throw new Error((await response.json()).error);
-      setItems(await response.json());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to load ${title.toLowerCase()}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [apiPath, title]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const {
+    items,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<CatalogRow>(apiPath);
 
   function resetForm() {
     setEditing(null);
@@ -77,6 +69,7 @@ export function CatalogAdmin({
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
     setError(null);
 
     const payload = {
@@ -85,38 +78,34 @@ export function CatalogAdmin({
       isActive: form.isActive,
     };
 
-    const response = await fetch(editing ? `${apiPath}/${editing.id}` : apiPath, {
-      method: editing ? "PATCH" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const data = await response.json();
-      setError(data.error ?? "Save failed");
-      return;
+    try {
+      await save({
+        url: editing ? `${apiPath}/${editing.id}` : apiPath,
+        method: editing ? "PATCH" : "POST",
+        body: payload,
+      });
+      resetForm();
+    } catch {
+      // Error message is set by the cache hook.
     }
-
-    resetForm();
-    await load();
   }
 
   async function handleDelete(id: string) {
     if (!confirm(`Delete this ${title.slice(0, -1).toLowerCase()}?`)) return;
-    const response = await fetch(`${apiPath}/${id}`, { method: "DELETE" });
-    if (!response.ok) {
-      const data = await response.json();
-      setError(data.error ?? "Delete failed");
-      return;
+    setError(null);
+    try {
+      await remove(`${apiPath}/${id}`, id);
+      if (editing?.id === id) resetForm();
+    } catch {
+      // Error message is set by the cache hook.
     }
-    await load();
   }
 
   const showForm = grants.canCreate || (editing !== null && grants.canUpdate);
   const canSubmit = editing ? grants.canUpdate : grants.canCreate;
   const canEditFields = editing ? grants.canUpdate : grants.canCreate;
 
-  if (loading) {
+  if (loading && items.length === 0) {
     return <p className="text-slate-400">Loading {title.toLowerCase()}...</p>;
   }
 
@@ -148,37 +137,42 @@ export function CatalogAdmin({
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             required
-            disabled={!canEditFields}
+            disabled={!canEditFields || submitting}
           />
           <input
             className={inputClass}
             placeholder="Description"
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
-            disabled={!canEditFields}
+            disabled={!canEditFields || submitting}
           />
           <label
             className={`flex items-center gap-2 text-sm text-slate-300 ${
-              canEditFields ? "" : "cursor-not-allowed opacity-70"
+              canEditFields && !submitting ? "" : "cursor-not-allowed opacity-70"
             }`}
           >
             <input
               type="checkbox"
               checked={form.isActive}
               onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-              disabled={!canEditFields}
+              disabled={!canEditFields || submitting}
             />
             Active
           </label>
         </div>
         <div className="flex gap-3">
           {canSubmit ? (
-            <button type="submit" className={buttonPrimaryClass}>
-              {editing ? "Update" : "Create"}
+            <button type="submit" className={buttonPrimaryClass} disabled={submitting}>
+              {saveButtonLabel({ submitting, isEdit: !!editing })}
             </button>
           ) : null}
           {editing ? (
-            <button type="button" className={buttonSecondaryClass} onClick={resetForm}>
+            <button
+              type="button"
+              className={buttonSecondaryClass}
+              onClick={resetForm}
+              disabled={submitting}
+            >
               Cancel
             </button>
           ) : null}
@@ -218,7 +212,9 @@ export function CatalogAdmin({
                     canUpdate={grants.canUpdate}
                     canDelete={grants.canDelete}
                     onEdit={() => startEdit(item)}
-                    onDelete={() => handleDelete(item.id)}
+                    onDelete={() => void handleDelete(item.id)}
+                    deleting={deletingId === item.id}
+                    disabled={submitting}
                   />
                 </td>
                 ) : null}

@@ -1,16 +1,19 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { RowActions } from "@/components/admin/row-actions";
 import { BuildingsAdmin } from "@/components/properties/buildings-admin";
 import { BuildingUtilityRatesAdmin } from "@/components/properties/building-utility-rates-admin";
 import { FloorsAdmin } from "@/components/properties/floors-admin";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { useCachedList } from "@/hooks/use-cached-list";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 type PropertySection = "properties" | "buildings" | "utilities" | "floors";
@@ -78,13 +81,21 @@ export function PropertiesAdmin({
           : initialSection;
 
   const [section, setSection] = useState<PropertySection>(resolvedInitial);
-  const [rows, setRows] = useState<PropertyRow[]>([]);
-  const [amenities, setAmenities] = useState<Amenity[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<PropertyRow | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
+
+  const {
+    items: rows,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<PropertyRow>("/api/properties");
+  const { data: amenities = [] } = useCachedFetch<Amenity[]>("/api/amenities");
 
   useEffect(() => {
     if (tabParam === "buildings" && showBuildings) setSection("buildings");
@@ -107,28 +118,6 @@ export function PropertiesAdmin({
     ...(showBuildings ? [{ id: "utilities" as const, label: "Utility rates" }] : []),
     ...(showFloors ? [{ id: "floors" as const, label: "Floors" }] : []),
   ];
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [propertiesRes, amenitiesRes] = await Promise.all([
-        fetch("/api/properties"),
-        fetch("/api/amenities"),
-      ]);
-      if (!propertiesRes.ok) throw new Error((await propertiesRes.json()).error);
-      setRows(await propertiesRes.json());
-      if (amenitiesRes.ok) setAmenities(await amenitiesRes.json());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   function resetForm() {
     setEditing(null);
@@ -161,6 +150,7 @@ export function PropertiesAdmin({
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
     setError(null);
     const payload = {
       name: form.name,
@@ -177,27 +167,25 @@ export function PropertiesAdmin({
       amenityIds: form.amenityIds,
     };
     try {
-      const res = await fetch(editing ? `/api/properties/${editing.id}` : "/api/properties", {
+      await save({
+        url: editing ? `/api/properties/${editing.id}` : "/api/properties",
         method: editing ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: payload,
       });
-      if (!res.ok) throw new Error((await res.json()).error);
       resetForm();
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
   async function handleDelete(row: PropertyRow) {
     if (!confirm("Delete this property?")) return;
-    const res = await fetch(`/api/properties/${row.id}`, { method: "DELETE" });
-    if (!res.ok) {
-      setError((await res.json()).error);
-      return;
+    setError(null);
+    try {
+      await remove(`/api/properties/${row.id}`, row.id);
+    } catch {
+      // Error message is set by the cache hook.
     }
-    await load();
   }
 
   return (
@@ -317,8 +305,12 @@ export function PropertiesAdmin({
             </div>
           </div>
           <div className="mt-4 flex gap-3">
-            <button type="submit" className={buttonPrimaryClass}>{editing ? "Update" : "Create"}</button>
-            <button type="button" onClick={resetForm} className={buttonSecondaryClass}>Cancel</button>
+            <button type="submit" className={buttonPrimaryClass} disabled={submitting}>
+              {saveButtonLabel({ submitting, isEdit: !!editing })}
+            </button>
+            <button type="button" onClick={resetForm} className={buttonSecondaryClass} disabled={submitting}>
+              Cancel
+            </button>
           </div>
         </form>
       ) : null}
@@ -354,6 +346,8 @@ export function PropertiesAdmin({
                       canDelete={grants.canDelete}
                       onEdit={() => openEditForm(row)}
                       onDelete={() => void handleDelete(row)}
+                      deleting={deletingId === row.id}
+                      disabled={submitting}
                     />
                   </td>
                 </tr>

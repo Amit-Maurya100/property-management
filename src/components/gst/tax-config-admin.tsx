@@ -1,14 +1,15 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
 import type { ResourceGrants } from "@/lib/permissions/grants";
-import { readApiError, readApiJson } from "@/lib/api/parse-response";
+import { useCachedList } from "@/hooks/use-cached-list";
 
 type TaxConfigRow = {
   id: string;
@@ -33,53 +34,51 @@ function formatDate(value: string) {
 }
 
 export function TaxConfigAdmin({ grants }: { grants: ResourceGrants }) {
-  const [rows, setRows] = useState<TaxConfigRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/gst/tax-config");
-      if (!res.ok) throw new Error(await readApiError(res));
-      setRows(await readApiJson(res));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load tax configuration");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const {
+    items: rows,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<TaxConfigRow>("/api/gst/tax-config");
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!grants.canCreate) return;
+    if (!grants.canCreate || submitting) return;
     setError(null);
 
     try {
-      const res = await fetch("/api/gst/tax-config", {
+      await save({
+        url: "/api/gst/tax-config",
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           cgstRate: Number(form.cgstRate),
           sgstRate: Number(form.sgstRate),
           igstRate: Number(form.igstRate),
           startDate: form.startDate,
           endDate: form.endDate,
-        }),
+        },
       });
-      if (!res.ok) throw new Error(await readApiError(res));
       setShowForm(false);
       setForm(emptyForm);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save tax configuration");
+    } catch {
+      // Error message is set by the cache hook.
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm("Delete this tax rate?")) return;
+    setError(null);
+    try {
+      await remove(`/api/gst/tax-config/${id}`, id);
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -97,7 +96,9 @@ export function TaxConfigAdmin({ grants }: { grants: ResourceGrants }) {
           <button
             type="button"
             className={buttonPrimaryClass}
+            disabled={submitting}
             onClick={() => {
+              if (submitting) return;
               setShowForm((open) => !open);
               setForm({
                 ...emptyForm,
@@ -121,6 +122,7 @@ export function TaxConfigAdmin({ grants }: { grants: ResourceGrants }) {
           onSubmit={handleSubmit}
           className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-6"
         >
+          <fieldset disabled={submitting} className="min-w-0 border-0 p-0">
           <h2 className="text-lg font-medium">New tax rate</h2>
           <div className="mt-4 grid gap-4 md:grid-cols-3">
             <div>
@@ -178,9 +180,10 @@ export function TaxConfigAdmin({ grants }: { grants: ResourceGrants }) {
             End date should be a future date until which this rate applies. After it passes, the
             configuration is marked expired.
           </p>
-          <button type="submit" className={`${buttonPrimaryClass} mt-4`}>
-            Save tax rate
+          <button type="submit" className={`${buttonPrimaryClass} mt-4`} disabled={submitting}>
+            {saveButtonLabel({ submitting, isEdit: false, createLabel: "Save tax rate" })}
           </button>
+          </fieldset>
         </form>
       ) : null}
 
@@ -198,7 +201,7 @@ export function TaxConfigAdmin({ grants }: { grants: ResourceGrants }) {
             </tr>
           </thead>
           <tbody>
-            {loading ? (
+            {loading && rows.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-slate-400">
                   Loading...
@@ -230,19 +233,10 @@ export function TaxConfigAdmin({ grants }: { grants: ResourceGrants }) {
                       <button
                         type="button"
                         className={buttonSecondaryClass}
-                        onClick={async () => {
-                          if (!confirm("Delete this tax rate?")) return;
-                          const res = await fetch(`/api/gst/tax-config/${row.id}`, {
-                            method: "DELETE",
-                          });
-                          if (!res.ok) {
-                            setError(await readApiError(res));
-                            return;
-                          }
-                          await load();
-                        }}
+                        disabled={deletingId === row.id || submitting}
+                        onClick={() => void handleDelete(row.id)}
                       >
-                        Delete
+                        {deletingId === row.id ? "Deleting..." : "Delete"}
                       </button>
                     </td>
                   ) : null}

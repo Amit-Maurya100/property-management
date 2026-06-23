@@ -47,6 +47,34 @@ function toDecimal(value: number) {
   return new Prisma.Decimal(value);
 }
 
+function resolvePartyGstNumber(gstNumber?: string | null) {
+  if (gstNumber == null || gstNumber.trim() === "") {
+    return null;
+  }
+  return normalizeGstNumber(gstNumber);
+}
+
+async function assertInvoiceNotDuplicate(
+  organizationId: bigint,
+  invoiceType: GstInvoiceType,
+  invoiceNumber: string,
+  gstNumber: string | null,
+) {
+  const existing = await prisma.gstInvoice.findFirst({
+    where: {
+      organizationId,
+      invoiceType,
+      invoiceNumber: invoiceNumber.trim(),
+      gstNumber,
+    },
+    select: { id: true },
+  });
+
+  if (existing) {
+    throw new Error("BAD_REQUEST:Invoice number already exists for this type");
+  }
+}
+
 function invoiceCreateData(
   data: InvoiceCreateInput,
   tax: Awaited<ReturnType<typeof resolveInvoiceTax>>,
@@ -85,6 +113,15 @@ export async function createGstInvoice(
   data: InvoiceCreateInput,
 ) {
   const organization = await requireOrganizationForUser(userId);
+  const partyGstNumber = resolvePartyGstNumber(data.gstNumber);
+
+  await assertInvoiceNotDuplicate(
+    organization.id,
+    invoiceType,
+    data.invoiceNumber,
+    partyGstNumber,
+  );
+
   const tax = await resolveInvoiceTax(userId, {
     invoiceDate: data.invoiceDate,
     taxableValue: data.taxableValue,
@@ -100,21 +137,20 @@ export async function createGstInvoice(
     });
   }
 
-  try {
-    return await prisma.gstInvoice.create({
-      data: {
-        organizationId: organization.id,
-        invoiceType,
-        ...invoiceCreateData(data, tax),
-      },
-      select: invoiceSelect,
-    });
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      throw new Error("BAD_REQUEST:Invoice number already exists for this type");
-    }
-    throw error;
-  }
+  return prisma.gstInvoice.create({
+    data: {
+      organizationId: organization.id,
+      invoiceType,
+      ...invoiceCreateData(
+        {
+          ...data,
+          gstNumber: partyGstNumber,
+        },
+        tax,
+      ),
+    },
+    select: invoiceSelect,
+  });
 }
 
 export async function deleteGstInvoice(userId: bigint, id: IdInput) {

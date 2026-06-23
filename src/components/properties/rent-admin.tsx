@@ -1,13 +1,16 @@
 "use client";
 
-import { FormEvent, Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, Fragment, useEffect, useMemo, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
 import { RowActions } from "@/components/admin/row-actions";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { useCachedList } from "@/hooks/use-cached-list";
 import {
   breakdownFromRentRow,
   calcDueDateFromPeriodStart,
@@ -95,43 +98,28 @@ function baselineSourceLabel(source: "stored" | "assignment" | "prior_bill") {
 }
 
 export function RentAdmin({ grants }: { grants: ResourceGrants }) {
-  const [tenants, setTenants] = useState<TenantDetail[]>([]);
-  const [assignments, setAssignments] = useState<AssignmentDetail[]>([]);
-  const [allRents, setAllRents] = useState<RentRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data: tenants = [], loading: tenantsLoading } =
+    useCachedFetch<TenantDetail[]>("/api/tenants");
+  const { data: assignments = [], loading: assignmentsLoading } =
+    useCachedFetch<AssignmentDetail[]>("/api/tenant-assignments");
+  const {
+    items: allRents,
+    loading: rentsLoading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<RentRow>("/api/rents");
+
+  const loading = tenantsLoading || assignmentsLoading || rentsLoading;
   const [editingRent, setEditingRent] = useState<RentRow | null>(null);
   const [monthlyForm, setMonthlyForm] = useState(emptyMonthlyForm);
   const [filterTenantId, setFilterTenantId] = useState("");
   const [viewingRentId, setViewingRentId] = useState<string | null>(null);
   const [utilityRates, setUtilityRates] = useState<BuildingUtilityRateSnapshot | null>(null);
   const [utilityRateError, setUtilityRateError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [tenantsRes, assignmentsRes, rentsRes] = await Promise.all([
-        fetch("/api/tenants"),
-        fetch("/api/tenant-assignments"),
-        fetch("/api/rents"),
-      ]);
-      if (!tenantsRes.ok) throw new Error((await tenantsRes.json()).error);
-      if (!assignmentsRes.ok) throw new Error((await assignmentsRes.json()).error);
-      if (!rentsRes.ok) throw new Error((await rentsRes.json()).error);
-      setTenants(await tenantsRes.json());
-      setAssignments(await assignmentsRes.json());
-      setAllRents(await rentsRes.json());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   const activeUnitId = useMemo(() => {
     const tenant = tenants.find((row) => row.id === monthlyForm.tenantId);
@@ -262,6 +250,7 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
   async function handleMonthlySubmit(event: FormEvent) {
     event.preventDefault();
     if (!monthlyContext || !canRecordMonthly || !monthlyContext.activeAssignment) return;
+    if (submitting) return;
 
     setError(null);
     const payload = {
@@ -286,19 +275,15 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
     };
 
     try {
-      const url = editingRent ? `/api/rents/${editingRent.id}` : "/api/rents";
-      const method = editingRent ? "PATCH" : "POST";
-      const res = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+      await save({
+        url: editingRent ? `/api/rents/${editingRent.id}` : "/api/rents",
+        method: editingRent ? "PATCH" : "POST",
+        body: payload,
       });
-      if (!res.ok) throw new Error((await res.json()).error);
       setEditingRent(null);
       setMonthlyForm(emptyMonthlyForm);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -542,14 +527,20 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
             <button
               type="submit"
               className={buttonPrimaryClass}
-              disabled={!canRecordMonthly}
+              disabled={!canRecordMonthly || submitting}
             >
-              Record rent
+              {saveButtonLabel({
+                submitting,
+                isEdit: !!editingRent,
+                createLabel: "Record rent",
+                updateLabel: "Update rent",
+              })}
             </button>
             {editingRent ? (
               <button
                 type="button"
                 className={buttonSecondaryClass}
+                disabled={submitting}
                 onClick={() => {
                   setEditingRent(null);
                   setMonthlyForm(emptyMonthlyForm);
@@ -657,16 +648,16 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                             }}
                             onDelete={async () => {
                               if (!confirm("Delete this rent record?")) return;
-                              const res = await fetch(`/api/rents/${row.id}`, {
-                                method: "DELETE",
-                              });
-                              if (!res.ok) {
-                                setError((await res.json()).error);
-                                return;
+                              setError(null);
+                              try {
+                                await remove(`/api/rents/${row.id}`, row.id);
+                                if (viewingRentId === row.id) setViewingRentId(null);
+                              } catch {
+                                // Error message is set by the cache hook.
                               }
-                              if (viewingRentId === row.id) setViewingRentId(null);
-                              await load();
                             }}
+                            deleting={deletingId === row.id}
+                            disabled={submitting}
                           />
                         </div>
                       </td>

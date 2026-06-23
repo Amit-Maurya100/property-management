@@ -1,13 +1,15 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
-import { readApiError, readApiJson } from "@/lib/api/parse-response";
+import { RowActions } from "@/components/admin/row-actions";
+import { useCachedList } from "@/hooks/use-cached-list";
 import { formatGstNumberInput } from "@/lib/gst/gst-number";
 import {
   CONSTITUTION_OF_BUSINESS_OPTIONS,
@@ -45,30 +47,20 @@ function formatDate(value: string) {
 }
 
 export function GstMasterAdmin({ grants }: { grants: ResourceGrants }) {
-  const [rows, setRows] = useState<GstMasterRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/gst/masters");
-      if (!res.ok) throw new Error(await readApiError(res));
-      setRows(await readApiJson(res));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load GST master");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const {
+    items: rows,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<GstMasterRow>("/api/gst/masters");
 
   function resetForm() {
     setForm(emptyForm);
@@ -93,6 +85,7 @@ export function GstMasterAdmin({ grants }: { grants: ResourceGrants }) {
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
     if (editingId ? !grants.canUpdate : !grants.canCreate) return;
     setError(null);
 
@@ -108,16 +101,14 @@ export function GstMasterAdmin({ grants }: { grants: ResourceGrants }) {
     };
 
     try {
-      const res = await fetch(editingId ? `/api/gst/masters/${editingId}` : "/api/gst/masters", {
+      await save({
+        url: editingId ? `/api/gst/masters/${editingId}` : "/api/gst/masters",
         method: editingId ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: payload,
       });
-      if (!res.ok) throw new Error(await readApiError(res));
       resetForm();
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save GST master record");
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -127,12 +118,10 @@ export function GstMasterAdmin({ grants }: { grants: ResourceGrants }) {
     setError(null);
 
     try {
-      const res = await fetch(`/api/gst/masters/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(await readApiError(res));
+      await remove(`/api/gst/masters/${id}`, id);
       if (editingId === id) resetForm();
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete GST master record");
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -150,7 +139,9 @@ export function GstMasterAdmin({ grants }: { grants: ResourceGrants }) {
           <button
             type="button"
             className={buttonPrimaryClass}
+            disabled={submitting}
             onClick={() => {
+              if (submitting) return;
               if (showForm && !editingId) {
                 resetForm();
               } else {
@@ -176,6 +167,7 @@ export function GstMasterAdmin({ grants }: { grants: ResourceGrants }) {
           onSubmit={handleSubmit}
           className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-6"
         >
+          <fieldset disabled={submitting} className="min-w-0 border-0 p-0">
           <h2 className="text-lg font-medium">
             {editingId ? "Edit GST master record" : "New GST master record"}
           </h2>
@@ -287,17 +279,27 @@ export function GstMasterAdmin({ grants }: { grants: ResourceGrants }) {
             </div>
           </div>
           <div className="mt-4 flex gap-3">
-            <button type="submit" className={buttonPrimaryClass}>
-              {editingId ? "Update record" : "Save record"}
+            <button type="submit" className={buttonPrimaryClass} disabled={submitting}>
+              {saveButtonLabel({
+                submitting,
+                isEdit: !!editingId,
+                createLabel: "Save record",
+                updateLabel: "Update record",
+              })}
             </button>
-            <button type="button" className={buttonSecondaryClass} onClick={resetForm}>
+            <button
+              type="button"
+              className={buttonSecondaryClass}
+              onClick={resetForm}
+            >
               Cancel
             </button>
           </div>
+          </fieldset>
         </form>
       ) : null}
 
-      {loading ? (
+      {loading && rows.length === 0 ? (
         <p className="mt-8 text-slate-400">Loading GST master...</p>
       ) : (
         <div className="mt-8 overflow-x-auto rounded-2xl border border-slate-800">
@@ -337,26 +339,14 @@ export function GstMasterAdmin({ grants }: { grants: ResourceGrants }) {
                     </td>
                     {(grants.canUpdate || grants.canDelete) && (
                       <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          {grants.canUpdate ? (
-                            <button
-                              type="button"
-                              className="text-violet-300 hover:text-violet-200"
-                              onClick={() => startEdit(row)}
-                            >
-                              Edit
-                            </button>
-                          ) : null}
-                          {grants.canDelete ? (
-                            <button
-                              type="button"
-                              className="text-red-300 hover:text-red-200"
-                              onClick={() => void handleDelete(row.id)}
-                            >
-                              Delete
-                            </button>
-                          ) : null}
-                        </div>
+                        <RowActions
+                          canUpdate={grants.canUpdate}
+                          canDelete={grants.canDelete}
+                          onEdit={() => startEdit(row)}
+                          onDelete={() => void handleDelete(row.id)}
+                          deleting={deletingId === row.id}
+                          disabled={submitting}
+                        />
                       </td>
                     )}
                   </tr>

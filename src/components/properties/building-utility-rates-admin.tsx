@@ -1,14 +1,16 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
 import { RowActions } from "@/components/admin/row-actions";
-import { readApiError, readApiJson } from "@/lib/api/parse-response";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { useCachedList } from "@/hooks/use-cached-list";
 import {
   BUILDING_UTILITY_LABELS,
   BUILDING_UTILITY_RATE_HINTS,
@@ -46,53 +48,43 @@ export function BuildingUtilityRatesAdmin({
   grants: ResourceGrants;
   embedded?: boolean;
 }) {
-  const [buildings, setBuildings] = useState<{ id: string; name: string; propertyName: string }[]>(
-    [],
-  );
   const [buildingFilter, setBuildingFilter] = useState("");
-  const [rows, setRows] = useState<UtilityRateRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [buildingsRes, ratesRes] = await Promise.all([
-        fetch("/api/buildings"),
-        fetch(
-          buildingFilter
-            ? `/api/buildings/utility-rates?buildingId=${buildingFilter}`
-            : "/api/buildings/utility-rates",
-        ),
-      ]);
-      if (!buildingsRes.ok) throw new Error(await readApiError(buildingsRes));
-      if (!ratesRes.ok) throw new Error(await readApiError(ratesRes));
+  const ratesUrl = useMemo(
+    () =>
+      buildingFilter
+        ? `/api/buildings/utility-rates?buildingId=${buildingFilter}`
+        : "/api/buildings/utility-rates",
+    [buildingFilter],
+  );
 
-      const buildingRows = await readApiJson<
-        Array<{ id: string; name: string; property: { name: string } }>
-      >(buildingsRes);
-      setBuildings(
-        buildingRows.map((row) => ({
-          id: row.id,
-          name: row.name,
-          propertyName: row.property.name,
-        })),
-      );
-      setRows(await readApiJson(ratesRes));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load utility rates");
-    } finally {
-      setLoading(false);
-    }
-  }, [buildingFilter]);
+  const { data: buildingRows = [] } = useCachedFetch<
+    Array<{ id: string; name: string; property: { name: string } }>
+  >("/api/buildings");
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const buildings = useMemo(
+    () =>
+      buildingRows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        propertyName: row.property.name,
+      })),
+    [buildingRows],
+  );
+
+  const {
+    items: rows,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<UtilityRateRow>(ratesUrl);
 
   function resetForm() {
     setForm(emptyForm);
@@ -115,6 +107,7 @@ export function BuildingUtilityRatesAdmin({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (editingId ? !grants.canUpdate : !grants.canCreate) return;
+    if (submitting) return;
     setError(null);
 
     const payload = {
@@ -125,26 +118,21 @@ export function BuildingUtilityRatesAdmin({
     };
 
     try {
-      const res = await fetch(
-        editingId ? `/api/buildings/utility-rates/${editingId}` : "/api/buildings/utility-rates",
-        {
-          method: editingId ? "PATCH" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            editingId
-              ? payload
-              : {
-                  buildingId: form.buildingId,
-                  ...payload,
-                },
-          ),
-        },
-      );
-      if (!res.ok) throw new Error(await readApiError(res));
+      await save({
+        url: editingId
+          ? `/api/buildings/utility-rates/${editingId}`
+          : "/api/buildings/utility-rates",
+        method: editingId ? "PATCH" : "POST",
+        body: editingId
+          ? payload
+          : {
+              buildingId: form.buildingId,
+              ...payload,
+            },
+      });
       resetForm();
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save utility rate");
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -152,12 +140,10 @@ export function BuildingUtilityRatesAdmin({
     if (!grants.canDelete || !window.confirm("Delete this utility rate?")) return;
     setError(null);
     try {
-      const res = await fetch(`/api/buildings/utility-rates/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(await readApiError(res));
+      await remove(`/api/buildings/utility-rates/${id}`, id);
       if (editingId === id) resetForm();
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete utility rate");
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -193,7 +179,9 @@ export function BuildingUtilityRatesAdmin({
           <button
             type="button"
             className={buttonPrimaryClass}
+            disabled={submitting}
             onClick={() => {
+              if (submitting) return;
               if (showForm && !editingId) {
                 resetForm();
               } else {
@@ -223,6 +211,7 @@ export function BuildingUtilityRatesAdmin({
           onSubmit={handleSubmit}
           className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-6"
         >
+          <fieldset disabled={submitting} className="min-w-0 border-0 p-0">
           <h2 className="text-lg font-medium">
             {editingId ? "Edit utility rate" : "New utility rate"}
           </h2>
@@ -293,15 +282,26 @@ export function BuildingUtilityRatesAdmin({
             />
           </div>
           <div className="mt-4 flex flex-wrap gap-3">
-            <button type="submit" className={buttonPrimaryClass}>
-              {editingId ? "Update utility rate" : "Save utility rate"}
+            <button type="submit" className={buttonPrimaryClass} disabled={submitting}>
+              {saveButtonLabel({
+                submitting,
+                isEdit: !!editingId,
+                createLabel: "Save utility rate",
+                updateLabel: "Update utility rate",
+              })}
             </button>
             {editingId ? (
-              <button type="button" className={buttonSecondaryClass} onClick={resetForm}>
+              <button
+                type="button"
+                className={buttonSecondaryClass}
+                onClick={resetForm}
+                disabled={submitting}
+              >
                 Cancel
               </button>
             ) : null}
           </div>
+          </fieldset>
         </form>
       ) : null}
 
@@ -360,6 +360,8 @@ export function BuildingUtilityRatesAdmin({
                           canDelete={grants.canDelete}
                           onEdit={() => startEdit(row)}
                           onDelete={() => void handleDelete(row.id)}
+                          deleting={deletingId === row.id}
+                          disabled={submitting}
                         />
                       </td>
                     ) : null}

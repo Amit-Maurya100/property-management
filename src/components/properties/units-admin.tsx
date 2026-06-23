@@ -1,8 +1,10 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { buttonPrimaryClass, inputClass } from "@/components/admin/ui";
 import { EntityCrudPanel } from "@/components/properties/entity-crud-panel";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { fetchJson } from "@/lib/api/client-cache";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 const unitTypes = ["APARTMENT", "ROOM", "OFFICE", "SHOP", "HALL"];
@@ -10,8 +12,10 @@ const billingCycles = ["HOURLY", "DAILY", "WEEKLY", "MONTHLY"];
 const availabilityStatuses = ["AVAILABLE", "RESERVED", "OCCUPIED"];
 
 function UnitPricingPanel({ unitId, canUpdate }: { unitId: string; canUpdate: boolean }) {
-  const [pricing, setPricing] = useState<Record<string, unknown>[]>([]);
-  const [availability, setAvailability] = useState<Record<string, unknown>[]>([]);
+  const [pricingSubmitting, setPricingSubmitting] = useState(false);
+  const [availabilitySubmitting, setAvailabilitySubmitting] = useState(false);
+  const pricingSubmittingRef = useRef(false);
+  const availabilitySubmittingRef = useRef(false);
   const [pricingForm, setPricingForm] = useState({
     currency: "INR",
     basePrice: "",
@@ -24,55 +28,70 @@ function UnitPricingPanel({ unitId, canUpdate }: { unitId: string; canUpdate: bo
     availableTo: "",
   });
 
-  const load = useCallback(async () => {
-    const [pRes, aRes] = await Promise.all([
-      fetch(`/api/units/${unitId}/pricing`),
-      fetch(`/api/units/${unitId}/pricing?type=availability`),
-    ]);
-    if (pRes.ok) setPricing(await pRes.json());
-    if (aRes.ok) setAvailability(await aRes.json());
-  }, [unitId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { data: pricing = [], reload: reloadPricing } = useCachedFetch<Record<string, unknown>[]>(
+    `/api/units/${unitId}/pricing`,
+  );
+  const { data: availability = [], reload: reloadAvailability } = useCachedFetch<
+    Record<string, unknown>[]
+  >(`/api/units/${unitId}/pricing?type=availability`);
 
   async function addPricing(event: FormEvent) {
     event.preventDefault();
-    await fetch(`/api/units/${unitId}/pricing`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        data: {
-          currency: pricingForm.currency,
-          basePrice: Number(pricingForm.basePrice),
-          billingCycle: pricingForm.billingCycle,
-          securityDeposit: pricingForm.securityDeposit
-            ? Number(pricingForm.securityDeposit)
-            : undefined,
-        },
-      }),
-    });
-    setPricingForm({ currency: "INR", basePrice: "", billingCycle: "MONTHLY", securityDeposit: "" });
-    await load();
+    if (pricingSubmittingRef.current) return;
+    pricingSubmittingRef.current = true;
+    setPricingSubmitting(true);
+    try {
+      await fetchJson(`/api/units/${unitId}/pricing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          data: {
+            currency: pricingForm.currency,
+            basePrice: Number(pricingForm.basePrice),
+            billingCycle: pricingForm.billingCycle,
+            securityDeposit: pricingForm.securityDeposit
+              ? Number(pricingForm.securityDeposit)
+              : undefined,
+          },
+        }),
+      });
+      setPricingForm({
+        currency: "INR",
+        basePrice: "",
+        billingCycle: "MONTHLY",
+        securityDeposit: "",
+      });
+      await reloadPricing(true);
+    } finally {
+      pricingSubmittingRef.current = false;
+      setPricingSubmitting(false);
+    }
   }
 
   async function addAvailability(event: FormEvent) {
     event.preventDefault();
-    await fetch(`/api/units/${unitId}/pricing`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "availability",
-        data: {
-          status: availabilityForm.status,
-          availableFrom: availabilityForm.availableFrom || undefined,
-          availableTo: availabilityForm.availableTo || undefined,
-        },
-      }),
-    });
-    setAvailabilityForm({ status: "AVAILABLE", availableFrom: "", availableTo: "" });
-    await load();
+    if (availabilitySubmittingRef.current) return;
+    availabilitySubmittingRef.current = true;
+    setAvailabilitySubmitting(true);
+    try {
+      await fetchJson(`/api/units/${unitId}/pricing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "availability",
+          data: {
+            status: availabilityForm.status,
+            availableFrom: availabilityForm.availableFrom || undefined,
+            availableTo: availabilityForm.availableTo || undefined,
+          },
+        }),
+      });
+      setAvailabilityForm({ status: "AVAILABLE", availableFrom: "", availableTo: "" });
+      await reloadAvailability(true);
+    } finally {
+      availabilitySubmittingRef.current = false;
+      setAvailabilitySubmitting(false);
+    }
   }
 
   if (!canUpdate) return null;
@@ -88,7 +107,9 @@ function UnitPricingPanel({ unitId, canUpdate }: { unitId: string; canUpdate: bo
             {billingCycles.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           <input placeholder="Security deposit" type="number" value={pricingForm.securityDeposit} onChange={(e) => setPricingForm({ ...pricingForm, securityDeposit: e.target.value })} className={inputClass} />
-          <button type="submit" className={buttonPrimaryClass}>Add pricing</button>
+          <button type="submit" className={buttonPrimaryClass} disabled={pricingSubmitting}>
+            {pricingSubmitting ? "Adding..." : "Add pricing"}
+          </button>
         </form>
         <ul className="mt-3 space-y-1 text-sm text-slate-300">
           {pricing.map((p) => (
@@ -104,7 +125,9 @@ function UnitPricingPanel({ unitId, canUpdate }: { unitId: string; canUpdate: bo
           </select>
           <input type="datetime-local" value={availabilityForm.availableFrom} onChange={(e) => setAvailabilityForm({ ...availabilityForm, availableFrom: e.target.value })} className={inputClass} />
           <input type="datetime-local" value={availabilityForm.availableTo} onChange={(e) => setAvailabilityForm({ ...availabilityForm, availableTo: e.target.value })} className={inputClass} />
-          <button type="submit" className={buttonPrimaryClass}>Add availability</button>
+          <button type="submit" className={buttonPrimaryClass} disabled={availabilitySubmitting}>
+            {availabilitySubmitting ? "Adding..." : "Add availability"}
+          </button>
         </form>
         <ul className="mt-3 space-y-1 text-sm text-slate-300">
           {availability.map((a) => (
@@ -117,15 +140,13 @@ function UnitPricingPanel({ unitId, canUpdate }: { unitId: string; canUpdate: bo
 }
 
 export function UnitsAdmin({ grants }: { grants: ResourceGrants }) {
-  const [floors, setFloors] = useState<{ id: string; floorNumber: number; building?: { name: string } }[]>([]);
-  const [units, setUnits] = useState<{ id: string; unitNumber: string }[]>([]);
   const [floorId, setFloorId] = useState("");
   const [selectedUnitId, setSelectedUnitId] = useState("");
 
-  useEffect(() => {
-    void fetch("/api/floors").then((res) => res.json()).then((data) => setFloors(data));
-    void fetch("/api/units").then((res) => res.json()).then((data) => setUnits(data));
-  }, []);
+  const { data: floors = [] } = useCachedFetch<
+    { id: string; floorNumber: number; building?: { name: string } }[]
+  >("/api/floors");
+  const { data: units = [] } = useCachedFetch<{ id: string; unitNumber: string }[]>("/api/units");
 
   return (
     <>

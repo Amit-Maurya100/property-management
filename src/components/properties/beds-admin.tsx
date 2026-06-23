@@ -1,18 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { EntityCrudPanel } from "@/components/properties/entity-crud-panel";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 const bedTypes = ["SINGLE", "DOUBLE", "BUNK"];
 
-export function BedsAdmin({ grants }: { grants: ResourceGrants }) {
-  const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
-  const [roomId, setRoomId] = useState("");
+type RoomOption = { id: string; name: string };
 
-  useEffect(() => {
-    void fetch("/api/rooms").then((res) => res.json()).then((data) => setRooms(data));
-  }, []);
+export function BedsAdmin({ grants }: { grants: ResourceGrants }) {
+  const [roomId, setRoomId] = useState("");
+  const { data: rooms = [] } = useCachedFetch<RoomOption[]>("/api/rooms");
+
+  const roomOptions = useMemo(
+    () => rooms.map((r) => ({ value: r.id, label: r.name })),
+    [rooms],
+  );
 
   return (
     <EntityCrudPanel
@@ -26,7 +30,7 @@ export function BedsAdmin({ grants }: { grants: ResourceGrants }) {
           label: "Room",
           type: "select",
           required: true,
-          options: rooms.map((r) => ({ value: r.id, label: r.name })),
+          options: roomOptions,
         },
         {
           key: "bedType",

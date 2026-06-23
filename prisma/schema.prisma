@@ -719,7 +719,7 @@ model GstInvoice {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  @@unique([organizationId, invoiceType, invoiceNumber], map: "unique_org_type_invoice_number")
+  @@index([organizationId, invoiceType, invoiceNumber, gstNumber], map: "idx_gst_invoices_org_type_number_gst")
   @@index([organizationId, invoiceType], map: "idx_gst_invoices_org_type")
   @@index([invoiceDate], map: "idx_gst_invoices_date")
   @@map("gst_invoices")

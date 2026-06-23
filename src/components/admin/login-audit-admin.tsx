@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { buttonSecondaryClass, inputClass } from "@/components/admin/ui";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
 
 type LoginAuditRow = {
   id: string;
@@ -37,9 +38,6 @@ function formatDateTime(value: string) {
 }
 
 export function LoginAuditAdmin() {
-  const [data, setData] = useState<LoginAuditResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
     search: "",
@@ -47,31 +45,18 @@ export function LoginAuditAdmin() {
   });
   const [appliedFilters, setAppliedFilters] = useState(filters);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ page: String(page), limit: "50" });
-      if (appliedFilters.search) {
-        params.set("search", appliedFilters.search);
-      }
-      if (appliedFilters.attemptType) {
-        params.set("attemptType", appliedFilters.attemptType);
-      }
-
-      const response = await fetch(`/api/admin/login-audit?${params}`);
-      if (!response.ok) throw new Error((await response.json()).error);
-      setData(await response.json());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load login audit");
-    } finally {
-      setLoading(false);
+  const listUrl = useMemo(() => {
+    const params = new URLSearchParams({ page: String(page), limit: "50" });
+    if (appliedFilters.search) {
+      params.set("search", appliedFilters.search);
     }
+    if (appliedFilters.attemptType) {
+      params.set("attemptType", appliedFilters.attemptType);
+    }
+    return `/api/admin/login-audit?${params}`;
   }, [appliedFilters, page]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data, loading, error } = useCachedFetch<LoginAuditResponse>(listUrl);
 
   function handleFilterSubmit(event: FormEvent) {
     event.preventDefault();
@@ -128,10 +113,15 @@ export function LoginAuditAdmin() {
             <option value="LOCKED">LOCKED</option>
           </select>
           <div className="flex gap-3">
-            <button type="submit" className={buttonSecondaryClass}>
-              Apply
+            <button type="submit" className={buttonSecondaryClass} disabled={loading}>
+              {loading ? "Loading..." : "Apply"}
             </button>
-            <button type="button" className={buttonSecondaryClass} onClick={clearFilters}>
+            <button
+              type="button"
+              className={buttonSecondaryClass}
+              onClick={clearFilters}
+              disabled={loading}
+            >
               Clear
             </button>
           </div>

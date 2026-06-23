@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { EntityCrudPanel } from "@/components/properties/entity-crud-panel";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
 import type { ResourceGrants } from "@/lib/permissions/grants";
+
+type PropertyOption = { id: string; name: string };
 
 export function BuildingsAdmin({
   grants,
@@ -11,14 +14,13 @@ export function BuildingsAdmin({
   grants: ResourceGrants;
   embedded?: boolean;
 }) {
-  const [properties, setProperties] = useState<{ id: string; name: string }[]>([]);
   const [propertyId, setPropertyId] = useState("");
+  const { data: properties = [] } = useCachedFetch<PropertyOption[]>("/api/properties");
 
-  useEffect(() => {
-    void fetch("/api/properties")
-      .then((res) => res.json())
-      .then((data) => setProperties(data));
-  }, []);
+  const propertyOptions = useMemo(
+    () => properties.map((p) => ({ value: p.id, label: p.name })),
+    [properties],
+  );
 
   return (
     <EntityCrudPanel
@@ -33,7 +35,7 @@ export function BuildingsAdmin({
           label: "Property",
           type: "select",
           required: true,
-          options: properties.map((p) => ({ value: p.id, label: p.name })),
+          options: propertyOptions,
         },
         { key: "name", label: "Name", required: true },
       ]}

@@ -1,12 +1,14 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { RowActions } from "@/components/admin/row-actions";
+import { useCachedList } from "@/hooks/use-cached-list";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 type Option = { id: string; label: string };
@@ -32,6 +34,8 @@ type FilterConfig = {
   value: string;
   onChange: (value: string) => void;
 };
+
+type EntityRow = Record<string, unknown> & { id: string };
 
 type EntityCrudPanelProps = {
   title: string;
@@ -63,9 +67,6 @@ export function EntityCrudPanel({
   extraPanel,
   embedded = false,
 }: EntityCrudPanelProps) {
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
   const [form, setForm] = useState(getInitialForm);
   const [showForm, setShowForm] = useState(false);
@@ -81,24 +82,21 @@ export function EntityCrudPanel({
         .map((filter) => `${filter.key}=${encodeURIComponent(filter.value)}`)
         .join("&");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const url = queryString ? `${apiPath}?${queryString}` : apiPath;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error((await res.json()).error);
-      setRows(await res.json());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, [apiPath, queryString]);
+  const listUrl = useMemo(
+    () => (queryString ? `${apiPath}?${queryString}` : apiPath),
+    [apiPath, queryString],
+  );
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const {
+    items: rows,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<EntityRow>(listUrl);
 
   function resetForm() {
     setEditing(null);
@@ -120,19 +118,18 @@ export function EntityCrudPanel({
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
     setError(null);
     try {
       const payload = buildPayload(form);
-      const res = await fetch(editing ? `${apiPath}/${editing.id}` : apiPath, {
+      await save({
+        url: editing ? `${apiPath}/${editing.id}` : apiPath,
         method: editing ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: payload,
       });
-      if (!res.ok) throw new Error((await res.json()).error);
       resetForm();
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -140,11 +137,9 @@ export function EntityCrudPanel({
     if (!confirm("Delete this record?")) return;
     setError(null);
     try {
-      const res = await fetch(`${apiPath}/${row.id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error((await res.json()).error);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Delete failed");
+      await remove(`${apiPath}/${row.id}`, String(row.id));
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -165,6 +160,7 @@ export function EntityCrudPanel({
                 value={filter.value}
                 onChange={(event) => filter.onChange(event.target.value)}
                 className={inputClass}
+                disabled={submitting || deletingId != null}
               >
                 <option value="">All</option>
                 {filter.options.map((option) => (
@@ -180,7 +176,12 @@ export function EntityCrudPanel({
 
       {grants.canCreate && !showForm ? (
         <div className={embedded ? "mt-4" : "mt-6"}>
-          <button type="button" onClick={openCreateForm} className={buttonPrimaryClass}>
+          <button
+            type="button"
+            onClick={openCreateForm}
+            className={buttonPrimaryClass}
+            disabled={submitting || deletingId != null}
+          >
             Add {singularLabel}
           </button>
         </div>
@@ -195,6 +196,7 @@ export function EntityCrudPanel({
               : "mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-6"
           }
         >
+          <fieldset disabled={submitting} className="min-w-0 border-0 p-0">
           <h2 className="text-lg font-medium">
             {editing ? "Edit" : "Create"} {singularLabel}
           </h2>
@@ -243,13 +245,18 @@ export function EntityCrudPanel({
             ))}
           </div>
           <div className="mt-4 flex gap-3">
-            <button type="submit" className={buttonPrimaryClass}>
-              {editing ? "Update" : "Create"}
+            <button type="submit" className={buttonPrimaryClass} disabled={submitting}>
+              {saveButtonLabel({ submitting, isEdit: !!editing })}
             </button>
-            <button type="button" onClick={resetForm} className={buttonSecondaryClass}>
+            <button
+              type="button"
+              onClick={resetForm}
+              className={buttonSecondaryClass}
+            >
               Cancel
             </button>
           </div>
+          </fieldset>
         </form>
       ) : null}
 
@@ -302,6 +309,8 @@ export function EntityCrudPanel({
                       canDelete={grants.canDelete}
                       onEdit={() => openEditForm(row)}
                       onDelete={() => void handleDelete(row)}
+                      deleting={deletingId === String(row.id)}
+                      disabled={submitting}
                     />
                   </td>
                 </tr>

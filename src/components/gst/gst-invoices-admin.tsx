@@ -1,18 +1,20 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { useCachedList } from "@/hooks/use-cached-list";
 import {
   calculateInvoiceTax,
   isTaxConfigActive,
 } from "@/lib/gst/tax-calculations";
 import type { ResourceGrants } from "@/lib/permissions/grants";
-import { readApiError, readApiJson } from "@/lib/api/parse-response";
 import { formatGstNumberInput } from "@/lib/gst/gst-number";
 import { GstPartyLookup } from "@/components/gst/gst-party-lookup";
 import {
@@ -91,14 +93,30 @@ export function GstInvoicesAdmin({
   grants,
   organizationGstNumber,
 }: GstInvoicesAdminProps) {
-  const [rows, setRows] = useState<InvoiceRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
-  const [taxConfig, setTaxConfig] = useState<ActiveTaxConfig | null>(null);
   const [taxConfigError, setTaxConfigError] = useState<string | null>(null);
   const [search, setSearch] = useState<GstInvoiceSearchFilters>(emptyGstInvoiceSearch);
+
+  const listUrl = `/api/gst/invoices?type=${invoiceType}`;
+  const {
+    items: rows,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<InvoiceRow>(listUrl);
+
+  const taxConfigUrl =
+    showForm && form.invoiceDate
+      ? `/api/gst/tax-config/active?date=${form.invoiceDate}`
+      : "";
+  const { data: taxConfig } = useCachedFetch<ActiveTaxConfig | null>(taxConfigUrl, {
+    enabled: Boolean(taxConfigUrl),
+  });
 
   const isB2b = invoiceType === "B2B_SALE";
   const isB2c = invoiceType === "B2C_SALE";
@@ -117,62 +135,26 @@ export function GstInvoicesAdmin({
     ? form.customerGstNumber || null
     : form.gstNumber || null;
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/gst/invoices?type=${invoiceType}`);
-      if (!res.ok) throw new Error(await readApiError(res));
-      setRows(await readApiJson(res));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load invoices");
-    } finally {
-      setLoading(false);
-    }
-  }, [invoiceType]);
-
-  const loadTaxConfig = useCallback(async (date: string) => {
-    if (!date) {
-      setTaxConfig(null);
-      setTaxConfigError("Select an invoice date to load tax rates.");
+  useEffect(() => {
+    if (!showForm || !form.invoiceDate) {
+      setTaxConfigError(showForm ? "Select an invoice date to load tax rates." : null);
       return;
     }
-    try {
-      const res = await fetch(`/api/gst/tax-config/active?date=${date}`);
-      if (!res.ok) throw new Error(await readApiError(res));
-      const config: ActiveTaxConfig | null = await readApiJson(res);
-      if (!config) {
-        setTaxConfig(null);
-        setTaxConfigError("No active tax configuration for this invoice date.");
-        return;
-      }
-      const active = isTaxConfigActive(
-        new Date(config.startDate),
-        new Date(config.endDate),
-        new Date(date),
-      );
-      if (!active) {
-        setTaxConfig(config);
-        setTaxConfigError("Tax rate is expired for this invoice date.");
-        return;
-      }
-      setTaxConfig(config);
-      setTaxConfigError(config.isExpired ? "This tax rate period has ended." : null);
-    } catch (err) {
-      setTaxConfig(null);
-      setTaxConfigError(err instanceof Error ? err.message : "Failed to load tax rates");
+    if (!taxConfig) {
+      setTaxConfigError("No active tax configuration for this invoice date.");
+      return;
     }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
-    if (showForm && form.invoiceDate) {
-      void loadTaxConfig(form.invoiceDate);
+    const active = isTaxConfigActive(
+      new Date(taxConfig.startDate),
+      new Date(taxConfig.endDate),
+      new Date(form.invoiceDate),
+    );
+    if (!active) {
+      setTaxConfigError("Tax rate is expired for this invoice date.");
+      return;
     }
-  }, [showForm, form.invoiceDate, loadTaxConfig]);
+    setTaxConfigError(taxConfig.isExpired ? "This tax rate period has ended." : null);
+  }, [showForm, form.invoiceDate, taxConfig]);
 
   const calculatedTax = useMemo(() => {
     if (!taxConfig || !form.taxableValue || taxConfigError?.includes("No active")) {
@@ -210,7 +192,7 @@ export function GstInvoicesAdmin({
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!grants.canCreate || !calculatedTax) return;
+    if (!grants.canCreate || !calculatedTax || submitting) return;
     setError(null);
 
     const payload: Record<string, unknown> = {
@@ -235,17 +217,25 @@ export function GstInvoicesAdmin({
     }
 
     try {
-      const res = await fetch("/api/gst/invoices", {
+      await save({
+        url: "/api/gst/invoices",
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: payload,
       });
-      if (!res.ok) throw new Error(await readApiError(res));
       setShowForm(false);
       setForm(emptyForm);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save invoice");
+    } catch {
+      // Error message is set by the cache hook.
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm("Delete this invoice?")) return;
+    setError(null);
+    try {
+      await remove(`/api/gst/invoices/${id}`, id);
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -264,7 +254,9 @@ export function GstInvoicesAdmin({
           <button
             type="button"
             className={buttonPrimaryClass}
+            disabled={submitting}
             onClick={() => {
+              if (submitting) return;
               setShowForm((open) => !open);
               setForm({
                 ...emptyForm,
@@ -288,6 +280,7 @@ export function GstInvoicesAdmin({
           onSubmit={handleSubmit}
           className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-6"
         >
+          <fieldset disabled={submitting} className="min-w-0 border-0 p-0">
           <h2 className="text-lg font-medium">New invoice</h2>
 
           {taxConfigError ? (
@@ -478,11 +471,12 @@ export function GstInvoicesAdmin({
           </div>
           <button
             type="submit"
-            disabled={!calculatedTax}
+            disabled={!calculatedTax || submitting}
             className={`${buttonPrimaryClass} mt-4 disabled:opacity-50`}
           >
-            Save invoice
+            {saveButtonLabel({ submitting, isEdit: false, createLabel: "Save invoice" })}
           </button>
+          </fieldset>
         </form>
       ) : null}
 
@@ -621,7 +615,7 @@ export function GstInvoicesAdmin({
             </tr>
           </thead>
           <tbody>
-            {loading ? (
+            {loading && rows.length === 0 ? (
               <tr>
                 <td colSpan={14} className="px-4 py-8 text-slate-400">
                   Loading...
@@ -668,19 +662,10 @@ export function GstInvoicesAdmin({
                       <button
                         type="button"
                         className={buttonSecondaryClass}
-                        onClick={async () => {
-                          if (!confirm("Delete this invoice?")) return;
-                          const res = await fetch(`/api/gst/invoices/${row.id}`, {
-                            method: "DELETE",
-                          });
-                          if (!res.ok) {
-                            setError(await readApiError(res));
-                            return;
-                          }
-                          await load();
-                        }}
+                        disabled={deletingId === row.id || submitting}
+                        onClick={() => void handleDelete(row.id)}
                       >
-                        Delete
+                        {deletingId === row.id ? "Deleting..." : "Delete"}
                       </button>
                     </td>
                   ) : null}

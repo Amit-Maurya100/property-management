@@ -1,12 +1,15 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { RowActions } from "@/components/admin/row-actions";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { useCachedList } from "@/hooks/use-cached-list";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 type Permission = {
@@ -25,10 +28,6 @@ type RoleRow = {
 };
 
 export function RolesAdmin({ grants }: { grants: ResourceGrants }) {
-  const [roles, setRoles] = useState<RoleRow[]>([]);
-  const [permissions, setPermissions] = useState<Permission[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<RoleRow | null>(null);
   const [form, setForm] = useState({
     name: "",
@@ -36,28 +35,17 @@ export function RolesAdmin({ grants }: { grants: ResourceGrants }) {
     permissionIds: [] as string[],
   });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [rolesRes, permsRes] = await Promise.all([
-        fetch("/api/admin/roles"),
-        fetch("/api/admin/permissions"),
-      ]);
-      if (!rolesRes.ok) throw new Error((await rolesRes.json()).error);
-      if (!permsRes.ok) throw new Error((await permsRes.json()).error);
-      setRoles(await rolesRes.json());
-      setPermissions(await permsRes.json());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load roles");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const {
+    items: roles,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<RoleRow>("/api/admin/roles");
+  const { data: permissions = [] } = useCachedFetch<Permission[]>("/api/admin/permissions");
 
   function resetForm() {
     setEditing(null);
@@ -76,6 +64,7 @@ export function RolesAdmin({ grants }: { grants: ResourceGrants }) {
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
     setError(null);
 
     const payload = {
@@ -84,34 +73,26 @@ export function RolesAdmin({ grants }: { grants: ResourceGrants }) {
       permissionIds: form.permissionIds,
     };
 
-    const response = await fetch(
-      editing ? `/api/admin/roles/${editing.id}` : "/api/admin/roles",
-      {
+    try {
+      await save({
+        url: editing ? `/api/admin/roles/${editing.id}` : "/api/admin/roles",
         method: editing ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      },
-    );
-
-    if (!response.ok) {
-      const data = await response.json();
-      setError(data.error ?? "Save failed");
-      return;
+        body: payload,
+      });
+      resetForm();
+    } catch {
+      // Error message is set by the cache hook.
     }
-
-    resetForm();
-    await load();
   }
 
   async function handleDelete(id: string) {
     if (!confirm("Delete this role?")) return;
-    const response = await fetch(`/api/admin/roles/${id}`, { method: "DELETE" });
-    if (!response.ok) {
-      const data = await response.json();
-      setError(data.error ?? "Delete failed");
-      return;
+    setError(null);
+    try {
+      await remove(`/api/admin/roles/${id}`, id);
+    } catch {
+      // Error message is set by the cache hook.
     }
-    await load();
   }
 
   function togglePermission(permissionId: string) {
@@ -127,7 +108,7 @@ export function RolesAdmin({ grants }: { grants: ResourceGrants }) {
   const canSubmit = editing ? grants.canUpdate : grants.canCreate;
   const canEditCheckboxes = editing ? grants.canUpdate : grants.canCreate;
 
-  if (loading) {
+  if (loading && roles.length === 0) {
     return <p className="text-slate-400">Loading roles...</p>;
   }
 
@@ -159,13 +140,14 @@ export function RolesAdmin({ grants }: { grants: ResourceGrants }) {
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             required
-            disabled={editing?.name === "super_admin"}
+            disabled={editing?.name === "super_admin" || submitting}
           />
           <input
             className={inputClass}
             placeholder="Description"
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
+            disabled={submitting}
           />
         </div>
 
@@ -176,14 +158,14 @@ export function RolesAdmin({ grants }: { grants: ResourceGrants }) {
               <label
                 key={permission.id}
                 className={`flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm ${
-                  canEditCheckboxes ? "cursor-pointer" : "cursor-not-allowed opacity-70"
+                  canEditCheckboxes && !submitting ? "cursor-pointer" : "cursor-not-allowed opacity-70"
                 }`}
               >
                 <input
                   type="checkbox"
                   checked={form.permissionIds.includes(permission.id)}
                   onChange={() => togglePermission(permission.id)}
-                  disabled={!canEditCheckboxes}
+                  disabled={!canEditCheckboxes || submitting}
                 />
                 {permission.name}
               </label>
@@ -193,12 +175,17 @@ export function RolesAdmin({ grants }: { grants: ResourceGrants }) {
 
         <div className="flex gap-3">
           {canSubmit ? (
-            <button type="submit" className={buttonPrimaryClass}>
-              {editing ? "Update" : "Create"}
+            <button type="submit" className={buttonPrimaryClass} disabled={submitting}>
+              {saveButtonLabel({ submitting, isEdit: !!editing })}
             </button>
           ) : null}
           {editing ? (
-            <button type="button" className={buttonSecondaryClass} onClick={resetForm}>
+            <button
+              type="button"
+              className={buttonSecondaryClass}
+              onClick={resetForm}
+              disabled={submitting}
+            >
               Cancel
             </button>
           ) : null}
@@ -237,8 +224,10 @@ export function RolesAdmin({ grants }: { grants: ResourceGrants }) {
                     canUpdate={grants.canUpdate}
                     canDelete={grants.canDelete}
                     onEdit={() => startEdit(role)}
-                    onDelete={() => handleDelete(role.id)}
+                    onDelete={() => void handleDelete(role.id)}
                     hideDelete={role.name === "super_admin"}
+                    deleting={deletingId === role.id}
+                    disabled={submitting}
                   />
                 </td>
                 ) : null}

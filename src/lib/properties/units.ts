@@ -1,5 +1,11 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
+import {
+  SERVER_CACHE_TTL,
+  cachedQuery,
+  invalidatePropertyCache,
+  propertyCacheKey,
+} from "@/lib/api/server-cache";
 import { parseId, type IdInput } from "@/lib/ids";
 import type { PropertyAccessContext } from "@/lib/properties/ownership";
 import { assertUserOwnsFloor, assertUserOwnsUnit, ownerPropertyFilter } from "@/lib/properties/ownership";
@@ -32,18 +38,23 @@ export async function listUnits(
   ctx: PropertyAccessContext,
   filters: { floorId?: bigint; buildingId?: bigint; propertyId?: bigint } = {},
 ) {
-  return prisma.unit.findMany({
-    where: {
-      ...(filters.floorId ? { floorId: filters.floorId } : {}),
-      ...(filters.buildingId ? { floor: { buildingId: filters.buildingId } } : {}),
-      ...(filters.propertyId
-        ? { floor: { building: { propertyId: filters.propertyId } } }
-        : {}),
-      floor: { building: { property: ownerPropertyFilter(ctx) } },
-    },
-    select: unitSelect,
-    orderBy: { unitNumber: "asc" },
-  });
+  return cachedQuery(
+    propertyCacheKey(ctx.userId, "units", filters),
+    SERVER_CACHE_TTL.reference,
+    () =>
+      prisma.unit.findMany({
+        where: {
+          ...(filters.floorId ? { floorId: filters.floorId } : {}),
+          ...(filters.buildingId ? { floor: { buildingId: filters.buildingId } } : {}),
+          ...(filters.propertyId
+            ? { floor: { building: { propertyId: filters.propertyId } } }
+            : {}),
+          floor: { building: { property: ownerPropertyFilter(ctx) } },
+        },
+        select: unitSelect,
+        orderBy: { unitNumber: "asc" },
+      }),
+  );
 }
 
 export async function getUnit(ctx: PropertyAccessContext, id: IdInput) {
@@ -68,7 +79,7 @@ export async function createUnit(
   },
 ) {
   await assertUserOwnsFloor(ctx, data.floorId);
-  return prisma.unit.create({
+  const unit = await prisma.unit.create({
     data: {
       floorId: data.floorId,
       unitNumber: data.unitNumber,
@@ -78,6 +89,8 @@ export async function createUnit(
     },
     select: unitSelect,
   });
+  invalidatePropertyCache(ctx.userId);
+  return unit;
 }
 
 export async function updateUnit(
@@ -94,7 +107,7 @@ export async function updateUnit(
   const unitId = parseId(id);
   await assertUserOwnsUnit(ctx, unitId);
   if (data.floorId) await assertUserOwnsFloor(ctx, data.floorId);
-  return prisma.unit.update({
+  const unit = await prisma.unit.update({
     where: { id: unitId },
     data: {
       unitNumber: data.unitNumber,
@@ -105,10 +118,13 @@ export async function updateUnit(
     },
     select: unitSelect,
   });
+  invalidatePropertyCache(ctx.userId);
+  return unit;
 }
 
 export async function deleteUnit(ctx: PropertyAccessContext, id: IdInput) {
   const unitId = parseId(id);
   await assertUserOwnsUnit(ctx, unitId);
   await prisma.unit.delete({ where: { id: unitId } });
+  invalidatePropertyCache(ctx.userId);
 }
