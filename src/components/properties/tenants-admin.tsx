@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
@@ -8,9 +8,11 @@ import {
   saveButtonLabel,
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
+import { TenantExitPanel } from "@/components/properties/tenant-exit-panel";
 import { RowActions } from "@/components/admin/row-actions";
 import { useCachedFetch } from "@/hooks/use-cached-fetch";
 import { useCachedList } from "@/hooks/use-cached-list";
+import { formatMoney, toNumber, calcLeaseToFromLeaseFrom } from "@/lib/properties/rent-calculations";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 type AssignmentRow = {
@@ -45,6 +47,7 @@ type TenantRow = {
   phone?: string | null;
   idDocument?: string | null;
   pictureUrl?: string | null;
+  securityDeposit?: string | null;
   unit?: {
     id: string;
     unitNumber: string;
@@ -69,6 +72,13 @@ type UnitOption = {
   };
 };
 
+type TenantRentRow = {
+  id: string;
+  startDate: string;
+  electricityUnits?: string | null;
+  gasUnits?: string | null;
+};
+
 const emptyTenantForm = {
   firstName: "",
   lastName: "",
@@ -77,6 +87,7 @@ const emptyTenantForm = {
   idDocument: "",
   unitId: "",
   pictureUrl: "",
+  securityDeposit: "",
 };
 
 const emptyAssignmentForm = {
@@ -123,6 +134,41 @@ function tenantName(row: { firstName: string; lastName: string }) {
   return `${row.firstName} ${row.lastName}`;
 }
 
+function findLatestRentForTenant(rents: TenantRentRow[]) {
+  return [...rents].sort((a, b) => b.startDate.localeCompare(a.startDate))[0];
+}
+
+function utilityInitsFromLatestRent(rent?: TenantRentRow) {
+  if (!rent) {
+    return { initialElectricityUnits: "", initialGasUnits: "" };
+  }
+
+  return {
+    initialElectricityUnits:
+      rent.electricityUnits != null && rent.electricityUnits !== ""
+        ? String(rent.electricityUnits)
+        : "",
+    initialGasUnits:
+      rent.gasUnits != null && rent.gasUnits !== "" ? String(rent.gasUnits) : "",
+  };
+}
+
+function buildNewAssignmentForm(params: {
+  unitId: string;
+  isSubsequent: boolean;
+  tenantRents: TenantRentRow[];
+}) {
+  const utilityInits = params.isSubsequent
+    ? utilityInitsFromLatestRent(findLatestRentForTenant(params.tenantRents))
+    : { initialElectricityUnits: "", initialGasUnits: "" };
+
+  return {
+    ...emptyAssignmentForm,
+    unitId: params.unitId,
+    ...utilityInits,
+  };
+}
+
 function buildTenantPayload(
   form: typeof emptyTenantForm,
   options: { isUpdate: boolean },
@@ -135,6 +181,12 @@ function buildTenantPayload(
     idDocument: form.idDocument || undefined,
     pictureUrl: form.pictureUrl || undefined,
   };
+
+  if (form.securityDeposit !== "") {
+    payload.securityDeposit = Number(form.securityDeposit);
+  } else if (options.isUpdate) {
+    payload.securityDeposit = 0;
+  }
 
   if (form.unitId) {
     payload.unitId = form.unitId;
@@ -209,6 +261,11 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
     invalidate: invalidateAssignments,
   } = useCachedList<AssignmentRow>(assignmentsUrl, { enabled: !!editingTenant });
 
+  const tenantRentsUrl = editingTenant ? `/api/rents?tenantId=${editingTenant.id}` : "";
+  const { items: tenantRents } = useCachedList<TenantRentRow>(tenantRentsUrl, {
+    enabled: !!editingTenant,
+  });
+
   function closeAssignmentEditor() {
     setAssignmentForm(emptyAssignmentForm);
     setShowAssignmentForm(false);
@@ -235,6 +292,7 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
           idDocument: saved.idDocument ?? "",
           unitId: saved.unit?.id ?? "",
           pictureUrl: saved.pictureUrl ?? "",
+          securityDeposit: saved.securityDeposit ? String(saved.securityDeposit) : "",
         });
       }
     } catch {
@@ -273,6 +331,20 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
     editingTenant?.assignments?.[0] ??
     null;
 
+  const { totalActiveRent, activeRentTenantCount } = useMemo(() => {
+    let total = 0;
+    let count = 0;
+
+    for (const tenant of tenants) {
+      const monthlyRent = tenant.assignments?.[0]?.monthlyRent;
+      if (monthlyRent == null || monthlyRent === "") continue;
+      total += toNumber(monthlyRent);
+      count += 1;
+    }
+
+    return { totalActiveRent: total, activeRentTenantCount: count };
+  }, [tenants]);
+
   return (
     <div>
       <h1 className="text-3xl font-semibold">Tenants</h1>
@@ -286,6 +358,17 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
           {error}
         </p>
       ) : null}
+
+      <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900 px-5 py-4">
+        <p className="text-sm text-slate-400">Total active rent</p>
+        <p className="mt-1 text-2xl font-semibold text-emerald-100">
+          {formatMoney(totalActiveRent)}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          {activeRentTenantCount} tenant{activeRentTenantCount === 1 ? "" : "s"} with an active
+          assignment and monthly rent
+        </p>
+      </div>
 
       {(grants.canCreate || grants.canUpdate) && (
         <form
@@ -356,6 +439,20 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
               </select>
             </div>
             <div>
+              <label className="mb-1 block text-sm text-slate-300">Security deposit</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0"
+                value={tenantForm.securityDeposit}
+                onChange={(e) =>
+                  setTenantForm({ ...tenantForm, securityDeposit: e.target.value })
+                }
+                className={inputClass}
+              />
+            </div>
+            <div>
               <label className="mb-1 block text-sm text-slate-300">Picture URL</label>
               <input
                 type="url"
@@ -414,10 +511,13 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
                 onClick={() => {
                   setEditingAssignment(null);
                   setShowAssignmentForm(true);
-                  setAssignmentForm({
-                    ...emptyAssignmentForm,
-                    unitId: tenantForm.unitId || activeAssignment?.unit.id || "",
-                  });
+                  setAssignmentForm(
+                    buildNewAssignmentForm({
+                      unitId: tenantForm.unitId || activeAssignment?.unit.id || "",
+                      isSubsequent: assignments.length > 0,
+                      tenantRents,
+                    }),
+                  );
                 }}
               >
                 New assignment
@@ -485,7 +585,11 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
                     : undefined
                 }
                 onChange={(leaseFrom) =>
-                  setAssignmentForm((prev) => ({ ...prev, leaseFrom }))
+                  setAssignmentForm((prev) => ({
+                    ...prev,
+                    leaseFrom,
+                    leaseTo: leaseFrom ? calcLeaseToFromLeaseFrom(leaseFrom) : "",
+                  }))
                 }
               />
               <DatePickerField
@@ -642,6 +746,22 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
               </tbody>
             </table>
           </div>
+
+          {activeAssignment ? (
+            <TenantExitPanel
+              tenantId={editingTenant.id}
+              tenantName={tenantName(editingTenant)}
+              assignment={activeAssignment}
+              tenantRents={tenantRents}
+              canCreate={grants.canCreate}
+              onCompleted={async () => {
+                const updatedTenants = await invalidateTenants();
+                await invalidateAssignments();
+                const updated = updatedTenants?.find((row) => row.id === editingTenant.id);
+                if (updated) setEditingTenant(updated);
+              }}
+            />
+          ) : null}
         </div>
       ) : null}
 
@@ -712,6 +832,9 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
                             idDocument: row.idDocument ?? "",
                             unitId: row.unit?.id ?? "",
                             pictureUrl: row.pictureUrl ?? "",
+                            securityDeposit: row.securityDeposit
+                              ? String(row.securityDeposit)
+                              : "",
                           });
                         }}
                         onDelete={async () => {

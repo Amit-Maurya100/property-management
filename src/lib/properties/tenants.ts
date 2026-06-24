@@ -18,6 +18,7 @@ const tenantSelect = {
   phone: true,
   idDocument: true,
   pictureUrl: true,
+  securityDeposit: true,
   createdAt: true,
   updatedAt: true,
   unit: {
@@ -53,14 +54,16 @@ type TenantInput = {
   idDocument?: string;
   unitId?: bigint;
   pictureUrl?: string;
+  securityDeposit?: number;
 };
 
-type TenantUpdateInput = Partial<Omit<TenantInput, "unitId">> & {
+type TenantUpdateInput = Partial<Omit<TenantInput, "unitId" | "securityDeposit">> & {
   email?: string | null;
   phone?: string | null;
   idDocument?: string | null;
   unitId?: bigint | null;
   pictureUrl?: string | null;
+  securityDeposit?: number | null;
 };
 
 function tenantCreateData(ctx: PropertyAccessContext, data: TenantInput) {
@@ -73,10 +76,11 @@ function tenantCreateData(ctx: PropertyAccessContext, data: TenantInput) {
     phone: data.phone || null,
     idDocument: data.idDocument || null,
     pictureUrl: data.pictureUrl || null,
+    securityDeposit: data.securityDeposit ?? 0,
   };
 }
 
-function tenantUpdateData(data: TenantUpdateInput) {
+function tenantUpdateData(data: TenantUpdateInput): Prisma.TenantUncheckedUpdateInput {
   return {
     firstName: data.firstName,
     lastName: data.lastName,
@@ -85,6 +89,8 @@ function tenantUpdateData(data: TenantUpdateInput) {
     idDocument: data.idDocument,
     unitId: data.unitId,
     pictureUrl: data.pictureUrl,
+    securityDeposit:
+      data.securityDeposit === null ? 0 : data.securityDeposit,
   };
 }
 

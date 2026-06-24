@@ -13,10 +13,10 @@ import { useCachedFetch } from "@/hooks/use-cached-fetch";
 import { useCachedList } from "@/hooks/use-cached-list";
 import {
   breakdownFromRentRow,
+  calcDefaultRentPeriodStart,
   calcDueDateFromPeriodStart,
   calcMonthlyPeriodEnd,
   calcRentBreakdown,
-  firstDayOfMonth,
   resolveUtilityBaselines,
   toNumber,
 } from "@/lib/properties/rent-calculations";
@@ -51,6 +51,7 @@ type RentRow = {
   tenantAssignmentId: string;
   startDate: string;
   endDate?: string | null;
+  isExitRent?: boolean;
   rent: string;
   totalRent?: string | null;
   electricityUnits?: string | null;
@@ -82,6 +83,9 @@ const emptyMonthlyForm = {
   misc: "",
 };
 
+const RENT_LIST_PAGE_SIZE = 20;
+const RENT_LIST_COL_SPAN = 11;
+
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
   return value.slice(0, 10);
@@ -95,6 +99,42 @@ function baselineSourceLabel(source: "stored" | "assignment" | "prior_bill") {
   if (source === "stored") return "saved with this bill";
   if (source === "assignment") return "from assignment initial readings";
   return "from previous month bill";
+}
+
+function findLatestRentForTenant(
+  rents: RentRow[],
+  tenantId: string,
+  unitId?: string,
+) {
+  const forTenant = rents.filter((row) => row.tenant.id === tenantId);
+  const forUnit = unitId ? forTenant.filter((row) => row.unit.id === unitId) : forTenant;
+  const pool = forUnit.length > 0 ? forUnit : forTenant;
+  return pool.sort((a, b) => b.startDate.localeCompare(a.startDate))[0];
+}
+
+function buildMonthlyFormForTenant(
+  tenantId: string,
+  tenants: TenantDetail[],
+  assignments: AssignmentDetail[],
+  rents: RentRow[],
+) {
+  const tenant = tenants.find((row) => row.id === tenantId);
+  const activeAssignment = assignments.find(
+    (row) => row.tenantId === tenantId && row.isActive,
+  );
+  const unitId = activeAssignment?.unit.id ?? tenant?.unit?.id ?? "";
+  const latestRent = findLatestRentForTenant(rents, tenantId, unitId);
+  const startDate = calcDefaultRentPeriodStart({
+    latestRent,
+    leaseFrom: activeAssignment?.leaseFrom ?? null,
+  });
+
+  return {
+    ...emptyMonthlyForm,
+    tenantId,
+    startDate,
+    endDate: startDate ? calcMonthlyPeriodEnd(startDate) : "",
+  };
 }
 
 export function RentAdmin({ grants }: { grants: ResourceGrants }) {
@@ -117,6 +157,7 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
   const [editingRent, setEditingRent] = useState<RentRow | null>(null);
   const [monthlyForm, setMonthlyForm] = useState(emptyMonthlyForm);
   const [filterTenantId, setFilterTenantId] = useState("");
+  const [rentListPage, setRentListPage] = useState(1);
   const [viewingRentId, setViewingRentId] = useState<string | null>(null);
   const [utilityRates, setUtilityRates] = useState<BuildingUtilityRateSnapshot | null>(null);
   const [utilityRateError, setUtilityRateError] = useState<string | null>(null);
@@ -157,13 +198,28 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
     return () => controller.abort();
   }, [activeUnitId, monthlyForm.startDate, editingRent?.utilityRateSnapshot]);
 
-  const displayedRents = useMemo(
-    () =>
-      filterTenantId
-        ? allRents.filter((row) => row.tenant.id === filterTenantId)
-        : allRents,
-    [allRents, filterTenantId],
+  const sortedDisplayedRents = useMemo(() => {
+    const filtered = filterTenantId
+      ? allRents.filter((row) => row.tenant.id === filterTenantId)
+      : allRents;
+
+    return [...filtered].sort((a, b) => {
+      const byStartDate = b.startDate.localeCompare(a.startDate);
+      if (byStartDate !== 0) return byStartDate;
+      return b.id.localeCompare(a.id);
+    });
+  }, [allRents, filterTenantId]);
+
+  const rentListTotalPages = Math.max(
+    1,
+    Math.ceil(sortedDisplayedRents.length / RENT_LIST_PAGE_SIZE),
   );
+
+  const paginatedRents = useMemo(() => {
+    const safePage = Math.min(rentListPage, rentListTotalPages);
+    const start = (safePage - 1) * RENT_LIST_PAGE_SIZE;
+    return sortedDisplayedRents.slice(start, start + RENT_LIST_PAGE_SIZE);
+  }, [sortedDisplayedRents, rentListPage, rentListTotalPages]);
 
   const monthlyContext = useMemo(() => {
     const tenant = tenants.find((row) => row.id === monthlyForm.tenantId);
@@ -173,15 +229,31 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
       (row) => row.tenantId === tenant.id && row.isActive,
     );
 
+    const billAssignment =
+      editingRent != null
+        ? (assignments.find((row) => row.id === editingRent.tenantAssignmentId) ?? {
+            id: editingRent.tenantAssignmentId,
+            monthlyRent: editingRent.rent,
+            monthlyDueDay: editingRent.tenantAssignment.monthlyDueDay,
+            leaseTo: editingRent.tenantAssignment.leaseTo,
+            initialElectricityUnits: null,
+            initialGasUnits: null,
+            unit: editingRent.unit,
+            isActive: editingRent.tenantAssignment.isActive,
+          })
+        : activeAssignment;
+
     const monthlyRent =
-      activeAssignment?.monthlyRent != null
-        ? toNumber(activeAssignment.monthlyRent)
-        : null;
+      editingRent != null
+        ? toNumber(editingRent.rent)
+        : billAssignment?.monthlyRent != null
+          ? toNumber(billAssignment.monthlyRent)
+          : null;
 
     const monthlyBills = allRents.filter((row) => row.tenant.id === tenant.id);
 
     const baselineResult = resolveUtilityBaselines({
-      assignment: activeAssignment ?? {
+      assignment: billAssignment ?? {
         initialElectricityUnits: 0,
         initialGasUnits: 0,
       },
@@ -200,12 +272,20 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
     });
 
     const dueDate =
-      activeAssignment?.monthlyDueDay != null && monthlyForm.startDate
+      billAssignment?.monthlyDueDay != null && monthlyForm.startDate
         ? calcDueDateFromPeriodStart(
             monthlyForm.startDate,
-            activeAssignment.monthlyDueDay,
+            billAssignment.monthlyDueDay,
           )
         : "";
+
+    const prorataPeriod =
+      editingRent?.isExitRent && monthlyForm.startDate && monthlyForm.endDate
+        ? {
+            startDateIso: monthlyForm.startDate,
+            endDateIso: monthlyForm.endDate,
+          }
+        : undefined;
 
     const breakdown =
       monthlyRent != null && utilityRates
@@ -218,12 +298,13 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
             maintenance: toNumber(monthlyForm.maintenance),
             misc: toNumber(monthlyForm.misc),
             rates: utilityRates,
+            prorataPeriod,
           })
         : null;
 
     return {
       tenant,
-      activeAssignment,
+      activeAssignment: billAssignment,
       monthlyRent,
       baselineElectricityUnits: baselineResult.electricityUnits,
       baselineGasUnits: baselineResult.gasUnits,
@@ -232,8 +313,9 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
       breakdown,
       utilityRates,
       totalRent: breakdown?.total ?? null,
-      unitId: activeAssignment?.unit.id ?? tenant.unit?.id ?? "",
-      unitNumber: activeAssignment?.unit.unitNumber ?? tenant.unit?.unitNumber ?? "",
+      unitId: billAssignment?.unit.id ?? tenant.unit?.id ?? "",
+      unitNumber: billAssignment?.unit.unitNumber ?? tenant.unit?.unitNumber ?? "",
+      isExitRent: editingRent?.isExitRent ?? false,
     };
   }, [tenants, assignments, allRents, monthlyForm, editingRent, utilityRates]);
 
@@ -244,6 +326,7 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
     monthlyContext.unitId !== "" &&
     monthlyContext.dueDate !== "" &&
     monthlyForm.startDate !== "" &&
+    (!monthlyContext.isExitRent || monthlyForm.endDate !== "") &&
     utilityRates != null &&
     !utilityRateError;
 
@@ -309,7 +392,10 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
         <label className="mb-1 block text-sm text-slate-300">Filter by tenant</label>
         <select
           value={filterTenantId}
-          onChange={(e) => setFilterTenantId(e.target.value)}
+          onChange={(e) => {
+            setFilterTenantId(e.target.value);
+            setRentListPage(1);
+          }}
           className={inputClass}
         >
           <option value="">All tenants</option>
@@ -339,13 +425,18 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                 value={monthlyForm.tenantId}
                 onChange={(e) => {
                   const tenantId = e.target.value;
-                  const startDate = firstDayOfMonth();
-                  setMonthlyForm({
-                    ...emptyMonthlyForm,
-                    tenantId,
-                    startDate,
-                    endDate: calcMonthlyPeriodEnd(startDate),
-                  });
+                  if (!tenantId) {
+                    setMonthlyForm(emptyMonthlyForm);
+                    return;
+                  }
+                  setMonthlyForm(
+                    buildMonthlyFormForTenant(
+                      tenantId,
+                      tenants,
+                      assignments,
+                      allRents,
+                    ),
+                  );
                 }}
                 className={inputClass}
               >
@@ -418,18 +509,33 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                     setMonthlyForm({
                       ...monthlyForm,
                       startDate,
-                      endDate: calcMonthlyPeriodEnd(startDate),
+                      endDate: editingRent?.isExitRent
+                        ? monthlyForm.endDate
+                        : calcMonthlyPeriodEnd(startDate),
                     })
                   }
                 />
-                <div>
-                  <label className="mb-1 block text-sm text-slate-300">To</label>
-                  <input
-                    readOnly
-                    value={monthlyForm.endDate || "Select From date"}
-                    className={`${inputClass} opacity-80`}
+                {monthlyContext.isExitRent ? (
+                  <DatePickerField
+                    label="To (exit date)"
+                    required
+                    value={monthlyForm.endDate}
+                    allowPastDates
+                    allowPastValue={
+                      editingRent?.endDate ? formatDate(editingRent.endDate) : undefined
+                    }
+                    onChange={(endDate) => setMonthlyForm({ ...monthlyForm, endDate })}
                   />
-                </div>
+                ) : (
+                  <div>
+                    <label className="mb-1 block text-sm text-slate-300">To</label>
+                    <input
+                      readOnly
+                      value={monthlyForm.endDate || "Select From date"}
+                      className={`${inputClass} opacity-80`}
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="mb-1 block text-sm text-slate-300">Due date</label>
@@ -517,7 +623,17 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                 ) : null}
 
                 {monthlyContext.breakdown ? (
-                  <RentBreakdownPanel breakdown={monthlyContext.breakdown} />
+                  <RentBreakdownPanel
+                    breakdown={monthlyContext.breakdown}
+                    subtitle={[
+                      tenantName(monthlyContext.tenant),
+                      monthlyForm.startDate && monthlyForm.endDate
+                        ? `${monthlyForm.startDate} to ${monthlyForm.endDate}`
+                        : monthlyForm.startDate || null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  />
                 ) : null}
               </>
             ) : null}
@@ -556,36 +672,35 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
       <div className="mt-8 overflow-x-auto rounded-2xl border border-slate-800">
         <table className="min-w-full text-sm">
           <thead className="bg-slate-900 text-left text-slate-400">
-            <tr>
-              <th className="px-4 py-3">Tenant</th>
-              <th className="px-4 py-3">Unit #</th>
-              <th className="px-4 py-3">From</th>
-              <th className="px-4 py-3">To</th>
-              <th className="px-4 py-3">Rent</th>
-              <th className="px-4 py-3">Total</th>
-              <th className="px-4 py-3">Elec.</th>
-              <th className="px-4 py-3">Gas</th>
-              <th className="px-4 py-3">Maint.</th>
-              <th className="px-4 py-3">Misc</th>
-              <th className="px-4 py-3">Due</th>
-              <th className="px-4 py-3">Actions</th>
+            <tr className="whitespace-nowrap">
+              <th className="px-3 py-3">Tenant</th>
+              <th className="px-3 py-3">From</th>
+              <th className="px-3 py-3">To</th>
+              <th className="px-3 py-3">Rent</th>
+              <th className="px-3 py-3">Total</th>
+              <th className="px-3 py-3">Elec.</th>
+              <th className="px-3 py-3">Gas</th>
+              <th className="px-3 py-3">Maint.</th>
+              <th className="px-3 py-3">Misc</th>
+              <th className="px-3 py-3">Due</th>
+              <th className="px-3 py-3">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={12} className="px-4 py-8 text-slate-400">
+                <td colSpan={RENT_LIST_COL_SPAN} className="px-4 py-8 text-slate-400">
                   Loading...
                 </td>
               </tr>
-            ) : displayedRents.length === 0 ? (
+            ) : sortedDisplayedRents.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-4 py-8 text-slate-400">
+                <td colSpan={RENT_LIST_COL_SPAN} className="px-4 py-8 text-slate-400">
                   No rent records yet.
                 </td>
               </tr>
             ) : (
-              displayedRents.map((row) => {
+              paginatedRents.map((row) => {
                 const assignmentDetail = assignments.find(
                   (assignment) => assignment.id === row.tenantAssignmentId,
                 );
@@ -602,20 +717,26 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
 
                 return (
                   <Fragment key={row.id}>
-                    <tr className="border-t border-slate-800">
-                      <td className="px-4 py-3">{tenantName(row.tenant)}</td>
-                      <td className="px-4 py-3">{row.unit.unitNumber}</td>
-                      <td className="px-4 py-3">{formatDate(row.startDate)}</td>
-                      <td className="px-4 py-3">{formatDate(row.endDate)}</td>
-                      <td className="px-4 py-3">{row.rent}</td>
-                      <td className="px-4 py-3">{row.totalRent ?? "—"}</td>
-                      <td className="px-4 py-3">{row.electricityUnits ?? "—"}</td>
-                      <td className="px-4 py-3">{row.gasUnits ?? "—"}</td>
-                      <td className="px-4 py-3">{row.maintenance ?? "—"}</td>
-                      <td className="px-4 py-3">{row.misc ?? "—"}</td>
-                      <td className="px-4 py-3">{formatDate(row.dueDate)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap items-center gap-2">
+                    <tr className="border-t border-slate-800 whitespace-nowrap">
+                      <td className="px-3 py-3">
+                        {tenantName(row.tenant)}
+                        {row.isExitRent ? (
+                          <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-200">
+                            Exit
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-3">{formatDate(row.startDate)}</td>
+                      <td className="px-3 py-3">{formatDate(row.endDate)}</td>
+                      <td className="px-3 py-3">{row.rent}</td>
+                      <td className="px-3 py-3">{row.totalRent ?? "—"}</td>
+                      <td className="px-3 py-3">{row.electricityUnits ?? "—"}</td>
+                      <td className="px-3 py-3">{row.gasUnits ?? "—"}</td>
+                      <td className="px-3 py-3">{row.maintenance ?? "—"}</td>
+                      <td className="px-3 py-3">{row.misc ?? "—"}</td>
+                      <td className="px-3 py-3">{formatDate(row.dueDate)}</td>
+                      <td className="px-3 py-3">
+                        <div className="flex flex-nowrap items-center gap-2">
                           {savedBreakdown ? (
                             <button
                               type="button"
@@ -637,7 +758,10 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                               setMonthlyForm({
                                 tenantId: row.tenant.id,
                                 startDate,
-                                endDate: calcMonthlyPeriodEnd(startDate),
+                                endDate:
+                                  row.isExitRent && row.endDate
+                                    ? formatDate(row.endDate)
+                                    : calcMonthlyPeriodEnd(startDate),
                                 electricityUnits: row.electricityUnits
                                   ? String(row.electricityUnits)
                                   : "",
@@ -664,8 +788,16 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                     </tr>
                     {isViewing && savedBreakdown ? (
                       <tr key={`${row.id}-breakdown`} className="border-t border-slate-800 bg-slate-950/40">
-                        <td colSpan={12} className="px-4 py-4">
-                          <RentBreakdownPanel breakdown={savedBreakdown} />
+                        <td colSpan={RENT_LIST_COL_SPAN} className="px-4 py-4">
+                          <RentBreakdownPanel
+                            breakdown={savedBreakdown}
+                            subtitle={[
+                              tenantName(row.tenant),
+                              row.endDate
+                                ? `${formatDate(row.startDate)} to ${formatDate(row.endDate)}`
+                                : formatDate(row.startDate),
+                            ].join(" · ")}
+                          />
                         </td>
                       </tr>
                     ) : null}
@@ -676,6 +808,35 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
           </tbody>
         </table>
       </div>
+
+      {sortedDisplayedRents.length > 0 ? (
+        <div className="mt-4 flex items-center justify-between text-sm text-slate-400">
+          <p>
+            Page {Math.min(rentListPage, rentListTotalPages)} of {rentListTotalPages} (
+            {sortedDisplayedRents.length} records)
+          </p>
+          {rentListTotalPages > 1 ? (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className={buttonSecondaryClass}
+                disabled={rentListPage <= 1 || loading}
+                onClick={() => setRentListPage((current) => Math.max(current - 1, 1))}
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                className={buttonSecondaryClass}
+                disabled={rentListPage >= rentListTotalPages || loading}
+                onClick={() => setRentListPage((current) => current + 1)}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

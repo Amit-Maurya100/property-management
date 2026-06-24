@@ -2,6 +2,16 @@ export type PaymentStatus = "PENDING" | "PARTIAL" | "PAID";
 
 export type PaymentModeValue = "CASH" | "CHEQUE" | "NEFT" | "UPI" | "OTHER";
 
+export type PaymentAccountNameValue = "AMIT" | "SARITA" | "PYARI" | "DN" | "NONE";
+
+export const PAYMENT_ACCOUNT_NAMES: PaymentAccountNameValue[] = [
+  "AMIT",
+  "SARITA",
+  "PYARI",
+  "DN",
+  "NONE",
+];
+
 type MoneyInput = string | number | { toString(): string } | null | undefined;
 
 export function toMoney(value: MoneyInput) {
@@ -70,6 +80,12 @@ export function paymentModeLabel(mode: PaymentModeValue) {
   if (mode === "NEFT") return "NEFT";
   if (mode === "UPI") return "UPI";
   return mode.charAt(0) + mode.slice(1).toLowerCase();
+}
+
+export function paymentAccountNameLabel(accountName: PaymentAccountNameValue) {
+  if (accountName === "DN") return "DN";
+  if (accountName === "NONE") return "None";
+  return accountName.charAt(0) + accountName.slice(1).toLowerCase();
 }
 
 export function paymentStatusLabel(status: PaymentStatus) {

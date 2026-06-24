@@ -27,6 +27,7 @@ const paymentSelect = {
   tenantId: true,
   amount: true,
   mode: true,
+  accountName: true,
   appliedToRent: true,
   toAdvance: true,
   paidAt: true,
@@ -40,6 +41,7 @@ const rentPaymentSelect = {
   unitId: true,
   startDate: true,
   endDate: true,
+  isExitRent: true,
   rent: true,
   totalRent: true,
   electricityUnits: true,
@@ -106,6 +108,8 @@ function computeRentBreakdown(
     {
       id: String(row.id),
       startDate: formatIsoDate(row.startDate),
+      endDate: row.endDate ? formatIsoDate(row.endDate) : null,
+      isExitRent: row.isExitRent,
       rent: toMoney(row.rent),
       electricityUnits: toMoney(row.electricityUnits),
       gasUnits: toMoney(row.gasUnits),
@@ -246,6 +250,7 @@ export async function createPayment(
     rentId: bigint;
     amount: number;
     mode: "CASH" | "CHEQUE" | "NEFT" | "UPI" | "OTHER";
+    accountName?: "AMIT" | "SARITA" | "PYARI" | "DN" | "NONE";
     paidAt?: Date;
     notes?: string;
   },
@@ -293,6 +298,7 @@ export async function createPayment(
         tenantId: rent.tenantId,
         amount: new Prisma.Decimal(data.amount),
         mode: data.mode,
+        accountName: data.accountName ?? "NONE",
         appliedToRent: new Prisma.Decimal(appliedToRent),
         toAdvance: new Prisma.Decimal(toAdvance),
         paidAt,

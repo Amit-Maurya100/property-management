@@ -13,8 +13,11 @@ import { useCachedList } from "@/hooks/use-cached-list";
 import { fetchMutation } from "@/lib/api/client-cache";
 import {
   formatMoney,
+  PAYMENT_ACCOUNT_NAMES,
+  paymentAccountNameLabel,
   paymentModeLabel,
   paymentStatusLabel,
+  type PaymentAccountNameValue,
   type PaymentModeValue,
 } from "@/lib/properties/payment-calculations";
 import type { ResourceGrants } from "@/lib/permissions/grants";
@@ -26,6 +29,7 @@ type PaymentRow = {
   id: string;
   amount: string;
   mode: PaymentModeValue;
+  accountName: PaymentAccountNameValue;
   appliedToRent: string;
   toAdvance: string;
   paidAt: string;
@@ -62,6 +66,7 @@ const PAYMENT_MODES: PaymentModeValue[] = ["CASH", "CHEQUE", "NEFT", "UPI", "OTH
 const emptyPaymentForm = {
   amount: "",
   mode: "CASH" as PaymentModeValue,
+  accountName: "NONE" as PaymentAccountNameValue,
   paidAt: "",
   notes: "",
 };
@@ -131,6 +136,7 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
           rentId: payingRentId,
           amount: Number(paymentForm.amount),
           mode: paymentForm.mode,
+          accountName: paymentForm.accountName,
           paidAt: paymentForm.paidAt || undefined,
           notes: paymentForm.notes || undefined,
         }),
@@ -246,6 +252,12 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
           {showPaymentBreakdown ? (
             <PaymentBreakdownPanel
               rentBreakdown={payingRent.rentBreakdown}
+              rentBreakdownSubtitle={[
+                tenantName(payingRent.tenant),
+                payingRent.endDate
+                  ? `${formatDate(payingRent.startDate)} to ${formatDate(payingRent.endDate)}`
+                  : formatDate(payingRent.startDate),
+              ].join(" · ")}
               priorBalance={toMoney(payingRent.priorBalance)}
               advanceBalance={toMoney(payingRent.tenant.advanceBalance)}
               paidTotal={payingRent.paidTotal}
@@ -286,6 +298,26 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                 {PAYMENT_MODES.map((mode) => (
                   <option key={mode} value={mode}>
                     {paymentModeLabel(mode)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-300">Account name</label>
+              <select
+                required
+                value={paymentForm.accountName}
+                onChange={(e) =>
+                  setPaymentForm((prev) => ({
+                    ...prev,
+                    accountName: e.target.value as PaymentAccountNameValue,
+                  }))
+                }
+                className={inputClass}
+              >
+                {PAYMENT_ACCOUNT_NAMES.map((accountName) => (
+                  <option key={accountName} value={accountName}>
+                    {paymentAccountNameLabel(accountName)}
                   </option>
                 ))}
               </select>
@@ -413,6 +445,7 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                                 <tr>
                                   <th className="px-3 py-2">Date</th>
                                   <th className="px-3 py-2">Mode</th>
+                                  <th className="px-3 py-2">Account</th>
                                   <th className="px-3 py-2">Amount</th>
                                   <th className="px-3 py-2">To rent</th>
                                   <th className="px-3 py-2">To advance</th>
@@ -427,6 +460,9 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                                   <tr key={payment.id} className="border-t border-slate-800">
                                     <td className="px-3 py-2">{formatDate(payment.paidAt)}</td>
                                     <td className="px-3 py-2">{paymentModeLabel(payment.mode)}</td>
+                                    <td className="px-3 py-2">
+                                      {paymentAccountNameLabel(payment.accountName ?? "NONE")}
+                                    </td>
                                     <td className="px-3 py-2">{formatMoney(toMoney(payment.amount))}</td>
                                     <td className="px-3 py-2">
                                       {formatMoney(toMoney(payment.appliedToRent))}

@@ -143,11 +143,16 @@ export const createTenantSchema = z.object({
   idDocument: trimmedString.max(100).optional(),
   unitId: idSchema.optional(),
   pictureUrl: trimmedString.max(2048).optional(),
+  securityDeposit: z.coerce.number().nonnegative().optional(),
 });
 
 export const updateTenantSchema = createTenantSchema
   .extend({
     unitId: z.union([idSchema, z.null()]).optional(),
+    securityDeposit: z.preprocess(
+      emptyToNull,
+      z.union([z.null(), z.coerce.number().nonnegative()]).optional(),
+    ),
   })
   .partial();
 
@@ -258,16 +263,60 @@ export const createRentSchema = z.object({
   dueDate: z.coerce.date(),
   utilityBaseline: utilityBaselineSchema.optional(),
   utilityRateSnapshot: utilityRateSnapshotSchema.optional(),
+  isExitRent: z.boolean().optional(),
+});
+
+export const tenantExitSchema = z.object({
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date(),
+  electricityUnits: z.coerce.number().nonnegative().optional(),
+  gasUnits: z.coerce.number().nonnegative().optional(),
+  maintenance: z.coerce.number().nonnegative().optional(),
+  misc: z.coerce.number().nonnegative().optional(),
+  dueDate: z.coerce.date().optional(),
 });
 
 export const updateRentSchema = createRentSchema.partial();
 
 export const paymentModeEnum = z.enum(["CASH", "CHEQUE", "NEFT", "UPI", "OTHER"]);
+export const paymentAccountNameEnum = z.enum(["AMIT", "SARITA", "PYARI", "DN", "NONE"]);
 
 export const createPaymentSchema = z.object({
   rentId: idSchema,
   amount: z.coerce.number().positive(),
   mode: paymentModeEnum,
+  accountName: paymentAccountNameEnum.default("NONE"),
   paidAt: z.coerce.date().optional(),
   notes: trimmedString.max(2000).optional(),
 });
+
+export const rentReportPeriodModeEnum = z.enum(["monthly", "quarterly", "yearly", "custom"]);
+
+export const rentReportQuerySchema = z
+  .object({
+    mode: rentReportPeriodModeEnum,
+    month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+    year: z.coerce.number().int().min(2000).max(2100).optional(),
+    quarter: z.coerce.number().int().min(1).max(4).optional(),
+    dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    tenantId: idSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.mode === "monthly" && !data.month) {
+      ctx.addIssue({ code: "custom", message: "month is required", path: ["month"] });
+    }
+    if (data.mode === "quarterly" && (!data.year || !data.quarter)) {
+      ctx.addIssue({ code: "custom", message: "year and quarter are required", path: ["year"] });
+    }
+    if (data.mode === "yearly" && !data.year) {
+      ctx.addIssue({ code: "custom", message: "year is required", path: ["year"] });
+    }
+    if (data.mode === "custom" && (!data.dateFrom || !data.dateTo)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "dateFrom and dateTo are required",
+        path: ["dateFrom"],
+      });
+    }
+  });
