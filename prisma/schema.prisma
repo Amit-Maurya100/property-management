@@ -666,6 +666,13 @@ enum GstInvoiceType {
   @@map("gst_invoice_type")
 }
 
+enum GstFilingStatus {
+  PENDING
+  FILED
+
+  @@map("gst_filing_status")
+}
+
 model Organization {
   id               BigInt             @id @default(autoincrement())
   uuid             String             @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -684,6 +691,7 @@ model Organization {
   invoices GstInvoice[]
   taxConfigurations GstTaxConfiguration[]
   gstMasters GstMaster[]
+  gstPayments GstPayment[]
 
   @@index([gstNumber], map: "idx_organizations_gst_number")
   @@map("organizations")
@@ -727,15 +735,40 @@ model GstInvoice {
   invoiceValue    Decimal        @map("invoice_value") @db.Decimal(12, 2)
   description     String?
   paymentStatus   PaymentStatus  @default(PENDING) @map("payment_status")
+  filingStatus    GstFilingStatus @default(PENDING) @map("filing_status")
   createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  payments       GstPayment[]
 
   @@index([organizationId, invoiceType, invoiceNumber, gstNumber], map: "idx_gst_invoices_org_type_number_gst")
   @@index([organizationId, invoiceType], map: "idx_gst_invoices_org_type")
   @@index([invoiceDate], map: "idx_gst_invoices_date")
   @@map("gst_invoices")
+}
+
+model GstPayment {
+  id               BigInt             @id @default(autoincrement())
+  uuid             String             @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  gstInvoiceId     BigInt             @map("gst_invoice_id")
+  organizationId   BigInt             @map("organization_id")
+  amount           Decimal            @db.Decimal(12, 2)
+  mode             PaymentMode
+  accountName      PaymentAccountName @default(NONE) @map("account_name")
+  appliedToInvoice Decimal            @map("applied_to_invoice") @db.Decimal(12, 2)
+  paidAt           DateTime           @default(now()) @map("paid_at") @db.Date
+  notes            String?
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  invoice      GstInvoice   @relation(fields: [gstInvoiceId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([gstInvoiceId], map: "idx_gst_payments_invoice_id")
+  @@index([organizationId], map: "idx_gst_payments_org_id")
+  @@index([paidAt], map: "idx_gst_payments_paid_at")
+  @@map("gst_payments")
 }
 
 model GstMaster {
@@ -750,13 +783,34 @@ model GstMaster {
   gstinStatus               String   @map("gstin_status") @db.VarChar(50)
   taxpayerType              String   @map("taxpayer_type") @db.VarChar(50)
   principalPlaceOfBusiness  String   @map("principal_place_of_business")
+  primaryContact            String?  @map("primary_contact") @db.VarChar(255)
+  secondaryContact          String?  @map("secondary_contact") @db.VarChar(255)
   createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt                 DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bankAccounts GstMasterBankAccount[]
 
   @@unique([organizationId, gstNumber], map: "unique_org_gst_master_number")
   @@index([organizationId], map: "idx_gst_masters_org")
   @@index([gstNumber], map: "idx_gst_masters_gst_number")
   @@map("gst_masters")
+}
+
+model GstMasterBankAccount {
+  id                BigInt   @id @default(autoincrement())
+  uuid              String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  gstMasterId       BigInt   @map("gst_master_id")
+  accountHolderName String   @map("account_holder_name") @db.VarChar(255)
+  bankName          String   @map("bank_name") @db.VarChar(255)
+  accountNumber     String   @map("account_number") @db.VarChar(50)
+  branch            String   @db.VarChar(255)
+  ifscCode          String   @map("ifsc_code") @db.VarChar(11)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  gstMaster GstMaster @relation(fields: [gstMasterId], references: [id], onDelete: Cascade)
+
+  @@index([gstMasterId], map: "idx_gst_master_bank_accounts_master")
+  @@map("gst_master_bank_accounts")
 }

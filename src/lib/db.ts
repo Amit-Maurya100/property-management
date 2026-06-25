@@ -15,8 +15,10 @@ function getPrismaSchemaFingerprint() {
     Prisma.PaymentScalarFieldEnum,
     Prisma.OrganizationScalarFieldEnum,
     Prisma.GstInvoiceScalarFieldEnum,
+    Prisma.GstPaymentScalarFieldEnum,
     Prisma.GstTaxConfigurationScalarFieldEnum,
     Prisma.GstMasterScalarFieldEnum,
+    Prisma.GstMasterBankAccountScalarFieldEnum,
     Prisma.BuildingUtilityRateScalarFieldEnum,
   ] as const;
 
@@ -61,8 +63,10 @@ function isPrismaClientStale(client: PrismaClient) {
     !("payment" in client) ||
     !("organization" in client) ||
     !("gstInvoice" in client) ||
+    !("gstPayment" in client) ||
     !("gstTaxConfiguration" in client) ||
     !("gstMaster" in client) ||
+    !("gstMasterBankAccount" in client) ||
     !("buildingUtilityRate" in client)
   );
 }

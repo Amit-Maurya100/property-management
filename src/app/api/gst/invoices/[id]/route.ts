@@ -1,6 +1,7 @@
 import { handleApiError, jsonOk } from "@/lib/api/response";
 import { getAuthenticatedGstUserId } from "@/lib/gst/api";
-import { deleteGstInvoice } from "@/lib/gst/invoices";
+import { deleteGstInvoice, updateGstInvoice } from "@/lib/gst/invoices";
+import { updateGstInvoiceSchema } from "@/lib/gst/schemas";
 import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { parseId } from "@/lib/ids";
@@ -25,6 +26,19 @@ async function getOwnedInvoice(userId: bigint, id: string) {
   });
   if (!invoice) throw new Error("NOT_FOUND");
   return invoice;
+}
+
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await context.params;
+    const userId = await getAuthenticatedGstUserId();
+    const invoice = await getOwnedInvoice(userId, id);
+    await requirePermission(resourceForType[invoice.invoiceType], "update", { fresh: true });
+    const body = updateGstInvoiceSchema.parse(await request.json());
+    return jsonOk(await updateGstInvoice(userId, id, body));
+  } catch (error) {
+    return handleApiError(error);
+  }
 }
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {

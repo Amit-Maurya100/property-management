@@ -13,6 +13,7 @@ import {
 } from "@/lib/properties/building-utility-rates";
 import { getActiveTenantAssignment } from "@/lib/properties/tenant-assignments";
 import { carryForwardTenantBalance } from "@/lib/properties/payments";
+import { sendRentGeneratedEmail } from "@/lib/email/send-rent-generated-email";
 import {
   calcTotalRent,
   resolveUtilityBaselines,
@@ -263,7 +264,7 @@ export async function createRent(
     rates: utilityRateSnapshot,
   });
 
-  return prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     const priorBalance = await carryForwardTenantBalance(tx, data.tenantId);
 
     return tx.rent.create({
@@ -290,6 +291,12 @@ export async function createRent(
       select: rentSelect,
     });
   });
+
+  void sendRentGeneratedEmail(created.id).catch((error) => {
+    console.error("Failed to send rent generated email", error);
+  });
+
+  return created;
 }
 
 export async function updateRent(
