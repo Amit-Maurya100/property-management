@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import type { GstReportExportData } from "@/lib/gst/reports";
 
 const INVOICE_HEADERS = [
@@ -17,6 +17,8 @@ const INVOICE_HEADERS = [
   "Grand Total",
   "Payment Status",
 ] as const;
+
+const COLUMN_WIDTHS = [12, 16, 12, 18, 20, 24, 14, 10, 10, 10, 10, 12, 14, 14];
 
 function invoiceTypeLabel(type: string) {
   if (type === "B2B_SALE") return "B2B Sale";
@@ -63,7 +65,7 @@ function totalsRow(label: string, data: GstReportExportData["sales"]) {
   ];
 }
 
-export function buildGstReportWorkbook(data: GstReportExportData) {
+export async function buildGstReportWorkbook(data: GstReportExportData) {
   const rows: (string | number)[][] = [
     ["GST Report"],
     ["Organization", data.organizationName],
@@ -88,27 +90,17 @@ export function buildGstReportWorkbook(data: GstReportExportData) {
     ["Sales below purchase", data.insight.salesBelowPurchase ? "Yes" : "No"],
   ];
 
-  const worksheet = XLSX.utils.aoa_to_sheet(rows);
-  worksheet["!cols"] = [
-    { wch: 12 },
-    { wch: 16 },
-    { wch: 12 },
-    { wch: 18 },
-    { wch: 20 },
-    { wch: 24 },
-    { wch: 14 },
-    { wch: 10 },
-    { wch: 10 },
-    { wch: 10 },
-    { wch: 10 },
-    { wch: 12 },
-    { wch: 14 },
-    { wch: 14 },
-  ];
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("GST Report");
 
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "GST Report");
-  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  for (const row of rows) {
+    worksheet.addRow(row);
+  }
+
+  worksheet.columns = COLUMN_WIDTHS.map((width) => ({ width }));
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }
 
 export function gstReportExportFilename(data: GstReportExportData) {

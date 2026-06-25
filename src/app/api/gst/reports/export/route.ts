@@ -18,7 +18,7 @@ export const GET = withPermission(async (request) => {
     });
     const userId = await getAuthenticatedGstUserId();
     const data = await getGstReportExportData(userId, query);
-    const buffer = buildGstReportWorkbook(data);
+    const buffer = await buildGstReportWorkbook(data);
     const filename = gstReportExportFilename(data);
 
     return new Response(new Uint8Array(buffer), {

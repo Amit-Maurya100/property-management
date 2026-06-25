@@ -11,6 +11,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ["whatsapp-web.js", "puppeteer", "sharp"],
   turbopack: {
     root: process.cwd(),
   },

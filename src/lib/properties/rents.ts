@@ -14,6 +14,7 @@ import {
 import { getActiveTenantAssignment } from "@/lib/properties/tenant-assignments";
 import { carryForwardTenantBalance } from "@/lib/properties/payments";
 import { sendRentGeneratedEmail } from "@/lib/email/send-rent-generated-email";
+import { sendRentGeneratedWhatsApp } from "@/lib/whatsapp/send-rent-generated-whatsapp";
 import {
   calcTotalRent,
   resolveUtilityBaselines,
@@ -294,6 +295,10 @@ export async function createRent(
 
   void sendRentGeneratedEmail(created.id).catch((error) => {
     console.error("Failed to send rent generated email", error);
+  });
+
+  void sendRentGeneratedWhatsApp(created.id).catch((error) => {
+    console.error("Failed to send rent generated WhatsApp message", error);
   });
 
   return created;

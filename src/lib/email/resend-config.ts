@@ -1,5 +1,9 @@
 const DEFAULT_FROM = "Maurya-Homes <onboarding@resend.dev>";
 
+export function isEmailEnabled() {
+  return process.env.EMAIL_ENABLED === "true";
+}
+
 export function isResendConfigured() {
   return Boolean(process.env.RESEND_API_KEY?.trim());
 }
