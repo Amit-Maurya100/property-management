@@ -15,6 +15,15 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd(),
   },
+  async redirects() {
+    return [
+      {
+        source: "/rent/whatsapp",
+        destination: "/rent/notifications",
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       {

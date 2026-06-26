@@ -36,15 +36,18 @@ model User {
   lockedUntil         DateTime?     @map("locked_until") @db.Timestamptz
   isLocked            Boolean       @default(false) @map("is_locked")
   accountStatus       AccountStatus @default(ACTIVE) @map("account_status")
+  mustChangePassword  Boolean       @default(false) @map("must_change_password")
   createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  userRoles    UserRole[]   @relation("UserRoles")
-  grantedRoles UserRole[]   @relation("GrantedBy")
-  loginAudits  LoginAudit[]
-  properties   Property[]   @relation("PropertyOwner")
-  tenants      Tenant[]     @relation("TenantOwner")
-  organizations Organization?
+  userRoles     UserRole[]   @relation("UserRoles")
+  grantedRoles  UserRole[]   @relation("GrantedBy")
+  loginAudits   LoginAudit[]
+  properties    Property[]   @relation("PropertyOwner")
+  tenants       Tenant[]     @relation("TenantOwner")
+  tenantProfile      Tenant?              @relation("TenantLoginUser")
+  organizations      Organization?
+  rentPaymentAccounts RentPaymentAccount[]
 
   @@index([username], map: "idx_users_username")
   @@index([email], map: "idx_users_email")
@@ -547,17 +550,21 @@ model Tenant {
   pictureUrl String?  @map("picture_url") @db.VarChar(2048)
   advanceBalance Decimal @default(0) @map("advance_balance") @db.Decimal(12, 2)
   securityDeposit Decimal @default(0) @map("security_deposit") @db.Decimal(12, 2)
+  userId         BigInt?  @unique @map("user_id")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   owner        User               @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  loginUser    User?              @relation("TenantLoginUser", fields: [userId], references: [id], onDelete: SetNull)
   unit         Unit?              @relation(fields: [unitId], references: [id], onDelete: SetNull)
   assignments  TenantAssignment[]
   rents        Rent[]
-  payments     Payment[]
+  payments              Payment[]
+  rentPaymentAssignments TenantRentPaymentAccount[]
 
   @@index([ownerId], map: "idx_tenants_owner_id")
   @@index([unitId], map: "idx_tenants_unit_id")
+  @@index([userId], map: "idx_tenants_user_id")
   @@index([email], map: "idx_tenants_email")
   @@map("tenants")
 }
@@ -813,4 +820,60 @@ model GstMasterBankAccount {
 
   @@index([gstMasterId], map: "idx_gst_master_bank_accounts_master")
   @@map("gst_master_bank_accounts")
+}
+
+enum RentPaymentAccountType {
+  BANK
+  UPI
+
+  @@map("rent_payment_account_type")
+}
+
+model RentPaymentAccount {
+  id                BigInt                 @id @default(autoincrement())
+  uuid              String                 @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId           BigInt                 @map("owner_id")
+  label             String                 @db.VarChar(100)
+  accountType       RentPaymentAccountType @map("account_type")
+  accountHolderName String?                @map("account_holder_name") @db.VarChar(255)
+  bankName          String?                @map("bank_name") @db.VarChar(255)
+  accountNumber     String?                @map("account_number") @db.VarChar(50)
+  branch            String?                @db.VarChar(255)
+  ifscCode          String?                @map("ifsc_code") @db.VarChar(11)
+  upiId             String?                @map("upi_id") @db.VarChar(255)
+  upiBarcodeUrl     String?                @map("upi_barcode_url") @db.VarChar(2048)
+  isActive          Boolean                @default(true) @map("is_active")
+  sortOrder         Int                    @default(0) @map("sort_order")
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  owner    User                       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  tenants  TenantRentPaymentAccount[]
+
+  @@index([ownerId], map: "idx_rent_payment_accounts_owner_id")
+  @@index([isActive], map: "idx_rent_payment_accounts_active")
+  @@map("rent_payment_accounts")
+}
+
+model TenantRentPaymentAccount {
+  tenantId             BigInt   @map("tenant_id")
+  rentPaymentAccountId BigInt   @map("rent_payment_account_id")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  tenant  Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account RentPaymentAccount @relation(fields: [rentPaymentAccountId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, rentPaymentAccountId])
+  @@index([rentPaymentAccountId], map: "idx_tenant_rent_payment_accounts_account")
+  @@map("tenant_rent_payment_accounts")
+}
+
+model NotificationSettings {
+  id              Int      @id
+  emailEnabled    Boolean  @default(false) @map("email_enabled")
+  whatsappEnabled Boolean  @default(false) @map("whatsapp_enabled")
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  updatedById     BigInt?  @map("updated_by_id")
+
+  @@map("notification_settings")
 }

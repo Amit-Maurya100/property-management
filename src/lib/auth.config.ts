@@ -24,12 +24,32 @@ export const authConfig = {
           isLoggedIn &&
           (pathname.startsWith("/login") || pathname.startsWith("/register"))
         ) {
-          return NextResponse.redirect(new URL("/", request.nextUrl));
+          const mustChangePassword = Boolean(
+            (auth.user as { mustChangePassword?: boolean } | undefined)?.mustChangePassword,
+          );
+          return NextResponse.redirect(
+            new URL(mustChangePassword ? "/change-password" : "/", request.nextUrl),
+          );
         }
         return true;
       }
 
-      return isLoggedIn;
+      if (!isLoggedIn) {
+        return false;
+      }
+
+      const mustChangePassword = Boolean(
+        (auth.user as { mustChangePassword?: boolean } | undefined)?.mustChangePassword,
+      );
+      if (
+        mustChangePassword &&
+        !pathname.startsWith("/change-password") &&
+        !pathname.startsWith("/api/auth/change-password")
+      ) {
+        return NextResponse.redirect(new URL("/change-password", request.nextUrl));
+      }
+
+      return true;
     },
     jwt({ token, user }) {
       if (user) {
@@ -38,6 +58,7 @@ export const authConfig = {
         token.permissions = user.permissions;
         token.scopes = user.scopes;
         token.roles = user.roles;
+        token.mustChangePassword = user.mustChangePassword;
         delete token.invalidSession;
       } else if (token.sub && !/^\d+$/.test(String(token.sub))) {
         // Legacy session from before bigint user ids — force re-login.
@@ -61,6 +82,7 @@ export const authConfig = {
         session.user.scopes =
           (token.scopes as { type: string; value: string }[]) ?? [];
         session.user.roles = (token.roles as string[]) ?? [];
+        session.user.mustChangePassword = Boolean(token.mustChangePassword);
       }
       return session;
     },

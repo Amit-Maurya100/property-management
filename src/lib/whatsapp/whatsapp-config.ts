@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import { isWhatsAppEnabledSync } from "@/lib/notifications/settings";
+
+export { isWhatsAppEnabled } from "@/lib/notifications/settings";
 
 const SYSTEM_CHROME_CANDIDATES = [
   "/usr/bin/google-chrome-stable",
@@ -11,8 +14,14 @@ const SYSTEM_CHROME_CANDIDATES = [
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
 ];
 
-export function isWhatsAppEnabled() {
-  return process.env.WHATSAPP_ENABLED === "true";
+export function isVercelDeployment() {
+  return process.env.VERCEL === "1";
+}
+
+export function isWhatsAppRuntimeAvailable() {
+  if (!isWhatsAppEnabledSync()) return false;
+  if (isVercelDeployment()) return false;
+  return Boolean(resolvePuppeteerExecutablePath());
 }
 
 export function getWhatsAppDefaultCountryCode() {

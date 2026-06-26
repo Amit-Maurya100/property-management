@@ -46,6 +46,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             permissions: user.permissions,
             scopes: user.scopes,
             roles: user.roles,
+            mustChangePassword: user.mustChangePassword,
           };
         } catch (error) {
           if (error instanceof LoginError) {

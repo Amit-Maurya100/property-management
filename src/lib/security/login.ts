@@ -17,6 +17,7 @@ export type AuthenticatedUser = {
   permissions: string[];
   scopes: UserScope[];
   roles: string[];
+  mustChangePassword: boolean;
 };
 
 export class LoginError extends Error {
@@ -93,6 +94,7 @@ async function loadUserAuthProfile(userId: IdInput): Promise<AuthenticatedUser> 
       id: true,
       email: true,
       username: true,
+      mustChangePassword: true,
       userRoles: {
         where: {
           isActive: true,
@@ -133,6 +135,7 @@ async function loadUserAuthProfile(userId: IdInput): Promise<AuthenticatedUser> 
     permissions,
     scopes: uniqueScopes,
     roles: user.userRoles.map((userRole) => userRole.role.name),
+    mustChangePassword: user.mustChangePassword,
   };
 }
 

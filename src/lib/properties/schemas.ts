@@ -290,6 +290,55 @@ export const createPaymentSchema = z.object({
   notes: trimmedString.max(2000).optional(),
 });
 
+const rentPaymentAccountLabel = trimmedString.min(1).max(100);
+
+export const createBankPaymentAccountSchema = z.object({
+  accountType: z.literal("BANK"),
+  label: rentPaymentAccountLabel,
+  accountHolderName: trimmedString.min(1).max(255),
+  bankName: trimmedString.min(1).max(255),
+  accountNumber: trimmedString.min(1).max(50),
+  branch: trimmedString.min(1).max(255),
+  ifscCode: trimmedString.min(1).max(11),
+  isActive: z.boolean().optional(),
+  sortOrder: z.coerce.number().int().min(0).optional(),
+});
+
+export const createUpiPaymentAccountSchema = z.object({
+  accountType: z.literal("UPI"),
+  label: rentPaymentAccountLabel,
+  upiId: trimmedString.min(1).max(255),
+  upiBarcodeUrl: trimmedString.max(2048).optional().nullable(),
+  isActive: z.boolean().optional(),
+  sortOrder: z.coerce.number().int().min(0).optional(),
+});
+
+export const createRentPaymentAccountSchema = z.discriminatedUnion("accountType", [
+  createBankPaymentAccountSchema,
+  createUpiPaymentAccountSchema,
+]);
+
+export const updateRentPaymentAccountSchema = z
+  .object({
+    label: rentPaymentAccountLabel.optional(),
+    accountHolderName: trimmedString.max(255).optional(),
+    bankName: trimmedString.max(255).optional(),
+    accountNumber: trimmedString.max(50).optional(),
+    branch: trimmedString.max(255).optional(),
+    ifscCode: trimmedString.max(11).optional(),
+    upiId: trimmedString.max(255).optional(),
+    upiBarcodeUrl: trimmedString.max(2048).optional().nullable(),
+    isActive: z.boolean().optional(),
+    sortOrder: z.coerce.number().int().min(0).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one field is required",
+  });
+
+export const setTenantPaymentAccountsSchema = z.object({
+  accountIds: z.array(idSchema),
+});
+
 export const rentReportPeriodModeEnum = z.enum(["monthly", "quarterly", "yearly", "custom"]);
 
 export const rentReportQuerySchema = z

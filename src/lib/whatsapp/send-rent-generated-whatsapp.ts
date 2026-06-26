@@ -26,7 +26,7 @@ export type SendRentGeneratedWhatsAppResult =
 export async function sendRentGeneratedWhatsApp(
   rentId: bigint,
 ): Promise<SendRentGeneratedWhatsAppResult> {
-  if (!isWhatsAppEnabled()) {
+  if (!(await isWhatsAppEnabled())) {
     console.warn("WhatsApp is not enabled; skipping rent notification");
     return { sent: false, reason: "not_enabled" };
   }

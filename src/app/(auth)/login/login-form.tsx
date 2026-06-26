@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useState } from "react";
-import { signIn } from "next-auth/react";
+import { signIn, getSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { buttonPrimaryClass, cardClass, COMPANY_NAME, inputClass } from "@/components/auth/ui";
 
@@ -38,7 +38,9 @@ export function LoginForm() {
       return;
     }
 
-    router.push(callbackUrl);
+    const session = await getSession();
+    const destination = session?.user?.mustChangePassword ? "/change-password" : callbackUrl;
+    router.push(destination);
     router.refresh();
   }
 

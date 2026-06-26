@@ -18,7 +18,7 @@ export type SendRentGeneratedEmailResult =
 export async function sendRentGeneratedEmail(
   rentId: bigint,
 ): Promise<SendRentGeneratedEmailResult> {
-  if (!isEmailEnabled()) {
+  if (!(await isEmailEnabled())) {
     return { sent: false, reason: "not_enabled" };
   }
 

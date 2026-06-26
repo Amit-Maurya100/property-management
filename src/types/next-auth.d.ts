@@ -8,6 +8,7 @@ declare module "next-auth" {
       permissions: string[];
       scopes: { type: string; value: string }[];
       roles: string[];
+      mustChangePassword: boolean;
     } & DefaultSession["user"];
   }
 
@@ -16,6 +17,7 @@ declare module "next-auth" {
     permissions: string[];
     scopes: { type: string; value: string }[];
     roles: string[];
+    mustChangePassword: boolean;
   }
 }
 
@@ -25,5 +27,6 @@ declare module "next-auth/jwt" {
     permissions?: string[];
     scopes?: { type: string; value: string }[];
     roles?: string[];
+    mustChangePassword?: boolean;
   }
 }

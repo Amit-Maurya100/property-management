@@ -9,6 +9,7 @@ import {
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
 import { TenantExitPanel } from "@/components/properties/tenant-exit-panel";
+import { TenantPaymentAccountsPanel } from "@/components/properties/tenant-payment-accounts-panel";
 import { RowActions } from "@/components/admin/row-actions";
 import { useCachedFetch } from "@/hooks/use-cached-fetch";
 import { useCachedList } from "@/hooks/use-cached-list";
@@ -762,6 +763,11 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
               }}
             />
           ) : null}
+
+          <TenantPaymentAccountsPanel
+            tenantId={editingTenant.id}
+            canUpdate={grants.canUpdate}
+          />
         </div>
       ) : null}
 
