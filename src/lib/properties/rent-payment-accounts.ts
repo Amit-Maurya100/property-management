@@ -192,10 +192,8 @@ export async function listTenantAssignedPaymentAccounts(
 
 export async function getTenantPaymentAccountAssignment(ctx: PropertyAccessContext, tenantId: IdInput) {
   await assertUserOwnsTenant(ctx, tenantId);
-  const [available, assigned] = await Promise.all([
-    listRentPaymentAccounts(ctx),
-    listTenantAssignedPaymentAccounts(ctx, tenantId),
-  ]);
+  const available = await listRentPaymentAccounts(ctx);
+  const assigned = await listTenantAssignedPaymentAccounts(ctx, tenantId);
   const assignedIds = new Set(assigned.map((row) => row.id));
   return {
     available: available.filter((row) => row.isActive),

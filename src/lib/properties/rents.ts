@@ -293,15 +293,23 @@ export async function createRent(
     });
   });
 
-  void sendRentGeneratedEmail(created.id).catch((error) => {
-    console.error("Failed to send rent generated email", error);
-  });
-
-  void sendRentGeneratedWhatsApp(created.id).catch((error) => {
-    console.error("Failed to send rent generated WhatsApp message", error);
-  });
+  void dispatchRentGeneratedNotifications(created.id);
 
   return created;
+}
+
+async function dispatchRentGeneratedNotifications(rentId: bigint) {
+  try {
+    await sendRentGeneratedEmail(rentId);
+  } catch (error) {
+    console.error("Failed to send rent generated email", error);
+  }
+
+  try {
+    await sendRentGeneratedWhatsApp(rentId);
+  } catch (error) {
+    console.error("Failed to send rent generated WhatsApp message", error);
+  }
 }
 
 export async function updateRent(
