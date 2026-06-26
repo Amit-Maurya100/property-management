@@ -1,9 +1,10 @@
+import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { parseId, type IdInput } from "@/lib/ids";
 import { normalizeGstNumber } from "@/lib/gst/gst-number";
+import { bankAccountSelect } from "@/lib/gst/gst-master-bank-accounts";
 import { GST_MASTER_SEARCH_MIN_LENGTH } from "@/lib/gst/gst-master-options";
 import { requireOrganizationForUser } from "@/lib/gst/organizations";
-import { Prisma } from "@/generated/prisma/client";
 
 const gstMasterSelect = {
   id: true,
@@ -15,9 +16,48 @@ const gstMasterSelect = {
   gstinStatus: true,
   taxpayerType: true,
   principalPlaceOfBusiness: true,
+  primaryContact: true,
+  secondaryContact: true,
   createdAt: true,
   updatedAt: true,
-} as const;
+  bankAccounts: {
+    select: bankAccountSelect,
+    orderBy: [{ bankName: "asc" as const }, { accountNumber: "asc" as const }],
+  },
+} satisfies Prisma.GstMasterSelect;
+
+type GstMasterInput = {
+  gstNumber: string;
+  legalName: string;
+  tradeName: string;
+  effectiveRegistrationDate: Date;
+  constitutionOfBusiness: string;
+  gstinStatus: string;
+  taxpayerType: string;
+  principalPlaceOfBusiness: string;
+  primaryContact?: string | null;
+  secondaryContact?: string | null;
+};
+
+function normalizeOptionalContact(value?: string | null) {
+  if (value == null) return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function masterWriteData(data: GstMasterInput) {
+  return {
+    legalName: data.legalName,
+    tradeName: data.tradeName,
+    effectiveRegistrationDate: data.effectiveRegistrationDate,
+    constitutionOfBusiness: data.constitutionOfBusiness,
+    gstinStatus: data.gstinStatus,
+    taxpayerType: data.taxpayerType,
+    principalPlaceOfBusiness: data.principalPlaceOfBusiness,
+    primaryContact: normalizeOptionalContact(data.primaryContact),
+    secondaryContact: normalizeOptionalContact(data.secondaryContact),
+  };
+}
 
 export async function listGstMasters(userId: bigint) {
   const organization = await requireOrganizationForUser(userId);
@@ -28,19 +68,7 @@ export async function listGstMasters(userId: bigint) {
   });
 }
 
-export async function createGstMaster(
-  userId: bigint,
-  data: {
-    gstNumber: string;
-    legalName: string;
-    tradeName: string;
-    effectiveRegistrationDate: Date;
-    constitutionOfBusiness: string;
-    gstinStatus: string;
-    taxpayerType: string;
-    principalPlaceOfBusiness: string;
-  },
-) {
+export async function createGstMaster(userId: bigint, data: GstMasterInput) {
   const organization = await requireOrganizationForUser(userId);
   const gstNumber = normalizeGstNumber(data.gstNumber);
 
@@ -49,13 +77,7 @@ export async function createGstMaster(
       data: {
         organizationId: organization.id,
         gstNumber,
-        legalName: data.legalName,
-        tradeName: data.tradeName,
-        effectiveRegistrationDate: data.effectiveRegistrationDate,
-        constitutionOfBusiness: data.constitutionOfBusiness,
-        gstinStatus: data.gstinStatus,
-        taxpayerType: data.taxpayerType,
-        principalPlaceOfBusiness: data.principalPlaceOfBusiness,
+        ...masterWriteData(data),
       },
       select: gstMasterSelect,
     });
@@ -67,20 +89,7 @@ export async function createGstMaster(
   }
 }
 
-export async function updateGstMaster(
-  userId: bigint,
-  id: IdInput,
-  data: Partial<{
-    gstNumber: string;
-    legalName: string;
-    tradeName: string;
-    effectiveRegistrationDate: Date;
-    constitutionOfBusiness: string;
-    gstinStatus: string;
-    taxpayerType: string;
-    principalPlaceOfBusiness: string;
-  }>,
-) {
+export async function updateGstMaster(userId: bigint, id: IdInput, data: Partial<GstMasterInput>) {
   const organization = await requireOrganizationForUser(userId);
   const masterId = parseId(id);
 
@@ -107,6 +116,12 @@ export async function updateGstMaster(
         ...(data.taxpayerType != null ? { taxpayerType: data.taxpayerType } : {}),
         ...(data.principalPlaceOfBusiness != null
           ? { principalPlaceOfBusiness: data.principalPlaceOfBusiness }
+          : {}),
+        ...(data.primaryContact !== undefined
+          ? { primaryContact: normalizeOptionalContact(data.primaryContact) }
+          : {}),
+        ...(data.secondaryContact !== undefined
+          ? { secondaryContact: normalizeOptionalContact(data.secondaryContact) }
           : {}),
       },
       select: gstMasterSelect,

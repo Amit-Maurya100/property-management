@@ -42,6 +42,7 @@ function SummaryLine({
 
 export function PaymentBreakdownPanel({
   rentBreakdown,
+  rentBreakdownSubtitle,
   priorBalance,
   advanceBalance,
   paidTotal,
@@ -49,6 +50,7 @@ export function PaymentBreakdownPanel({
   balanceDue,
 }: {
   rentBreakdown: RentBreakdown | null;
+  rentBreakdownSubtitle?: string;
   priorBalance: number;
   advanceBalance: number;
   paidTotal: number;
@@ -58,7 +60,7 @@ export function PaymentBreakdownPanel({
   return (
     <div className="mt-4 space-y-4">
       {rentBreakdown ? (
-        <RentBreakdownPanel breakdown={rentBreakdown} />
+        <RentBreakdownPanel breakdown={rentBreakdown} subtitle={rentBreakdownSubtitle} />
       ) : (
         <div className="rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-400">
           Rent line-item breakdown is not available for this bill.

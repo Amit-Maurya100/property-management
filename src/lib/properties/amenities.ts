@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/db";
+import {
+  SERVER_CACHE_TTL,
+  cachedQuery,
+  catalogCacheKey,
+  invalidateCatalogCache,
+} from "@/lib/api/server-cache";
 import { parseId, type IdInput } from "@/lib/ids";
-import type { PropertyAccessContext } from "@/lib/properties/ownership";
 
 const amenitySelect = {
   id: true,
@@ -11,10 +16,12 @@ const amenitySelect = {
 } as const;
 
 export async function listAmenities() {
-  return prisma.amenity.findMany({
-    select: amenitySelect,
-    orderBy: [{ category: "asc" }, { name: "asc" }],
-  });
+  return cachedQuery(catalogCacheKey("amenities"), SERVER_CACHE_TTL.catalog, () =>
+    prisma.amenity.findMany({
+      select: amenitySelect,
+      orderBy: [{ category: "asc" }, { name: "asc" }],
+    }),
+  );
 }
 
 export async function getAmenity(id: IdInput) {
@@ -32,7 +39,9 @@ export async function createAmenity(data: {
 }) {
   const existing = await prisma.amenity.findUnique({ where: { name: data.name } });
   if (existing) throw new Error("CONFLICT:Amenity with this name already exists");
-  return prisma.amenity.create({ data, select: amenitySelect });
+  const amenity = await prisma.amenity.create({ data, select: amenitySelect });
+  invalidateCatalogCache();
+  return amenity;
 }
 
 export async function updateAmenity(
@@ -47,14 +56,17 @@ export async function updateAmenity(
     });
     if (conflict) throw new Error("CONFLICT:Amenity with this name already exists");
   }
-  return prisma.amenity.update({
+  const amenity = await prisma.amenity.update({
     where: { id: amenityId },
     data,
     select: amenitySelect,
   });
+  invalidateCatalogCache();
+  return amenity;
 }
 
 export async function deleteAmenity(id: IdInput) {
   await getAmenity(id);
   await prisma.amenity.delete({ where: { id: parseId(id) } });
+  invalidateCatalogCache();
 }

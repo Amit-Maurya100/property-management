@@ -1,4 +1,10 @@
 import { prisma } from "@/lib/db";
+import {
+  SERVER_CACHE_TTL,
+  cachedQuery,
+  invalidatePropertyCache,
+  propertyCacheKey,
+} from "@/lib/api/server-cache";
 import { parseId, type IdInput } from "@/lib/ids";
 import type { PropertyAccessContext } from "@/lib/properties/ownership";
 import {
@@ -26,15 +32,20 @@ export async function listFloors(
   ctx: PropertyAccessContext,
   filters: { buildingId?: bigint; propertyId?: bigint } = {},
 ) {
-  return prisma.floor.findMany({
-    where: {
-      ...(filters.buildingId ? { buildingId: filters.buildingId } : {}),
-      ...(filters.propertyId ? { building: { propertyId: filters.propertyId } } : {}),
-      building: { property: ownerPropertyFilter(ctx) },
-    },
-    select: floorSelect,
-    orderBy: { floorNumber: "asc" },
-  });
+  return cachedQuery(
+    propertyCacheKey(ctx.userId, "floors", filters),
+    SERVER_CACHE_TTL.reference,
+    () =>
+      prisma.floor.findMany({
+        where: {
+          ...(filters.buildingId ? { buildingId: filters.buildingId } : {}),
+          ...(filters.propertyId ? { building: { propertyId: filters.propertyId } } : {}),
+          building: { property: ownerPropertyFilter(ctx) },
+        },
+        select: floorSelect,
+        orderBy: { floorNumber: "asc" },
+      }),
+  );
 }
 
 export async function getFloor(ctx: PropertyAccessContext, id: IdInput) {
@@ -53,10 +64,12 @@ export async function createFloor(
   data: { buildingId: bigint; floorNumber: number },
 ) {
   await assertUserOwnsBuilding(ctx, data.buildingId);
-  return prisma.floor.create({
+  const floor = await prisma.floor.create({
     data: { buildingId: data.buildingId, floorNumber: data.floorNumber },
     select: floorSelect,
   });
+  invalidatePropertyCache(ctx.userId);
+  return floor;
 }
 
 export async function updateFloor(
@@ -67,15 +80,18 @@ export async function updateFloor(
   const floorId = parseId(id);
   await assertUserOwnsFloor(ctx, floorId);
   if (data.buildingId) await assertUserOwnsBuilding(ctx, data.buildingId);
-  return prisma.floor.update({
+  const floor = await prisma.floor.update({
     where: { id: floorId },
     data: { floorNumber: data.floorNumber, buildingId: data.buildingId },
     select: floorSelect,
   });
+  invalidatePropertyCache(ctx.userId);
+  return floor;
 }
 
 export async function deleteFloor(ctx: PropertyAccessContext, id: IdInput) {
   const floorId = parseId(id);
   await assertUserOwnsFloor(ctx, floorId);
   await prisma.floor.delete({ where: { id: floorId } });
+  invalidatePropertyCache(ctx.userId);
 }

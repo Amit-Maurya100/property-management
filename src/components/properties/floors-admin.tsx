@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { EntityCrudPanel } from "@/components/properties/entity-crud-panel";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
 import type { ResourceGrants } from "@/lib/permissions/grants";
+
+type BuildingOption = { id: string; name: string; property?: { name: string } };
 
 export function FloorsAdmin({
   grants,
@@ -11,14 +14,17 @@ export function FloorsAdmin({
   grants: ResourceGrants;
   embedded?: boolean;
 }) {
-  const [buildings, setBuildings] = useState<{ id: string; name: string; property?: { name: string } }[]>([]);
   const [buildingId, setBuildingId] = useState("");
+  const { data: buildings = [] } = useCachedFetch<BuildingOption[]>("/api/buildings");
 
-  useEffect(() => {
-    void fetch("/api/buildings")
-      .then((res) => res.json())
-      .then((data) => setBuildings(data));
-  }, []);
+  const buildingOptions = useMemo(
+    () =>
+      buildings.map((b) => ({
+        value: b.id,
+        label: `${b.name}${b.property ? ` (${b.property.name})` : ""}`,
+      })),
+    [buildings],
+  );
 
   return (
     <EntityCrudPanel
@@ -33,10 +39,7 @@ export function FloorsAdmin({
           label: "Building",
           type: "select",
           required: true,
-          options: buildings.map((b) => ({
-            value: b.id,
-            label: `${b.name}${b.property ? ` (${b.property.name})` : ""}`,
-          })),
+          options: buildingOptions,
         },
         { key: "floorNumber", label: "Floor Number", type: "number", required: true },
       ]}

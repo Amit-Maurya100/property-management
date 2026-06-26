@@ -25,12 +25,77 @@ export function calcMonthlyPeriodEnd(fromDateIso: string) {
   return formatIsoDate(end);
 }
 
+export function addDaysIso(fromDateIso: string, days: number) {
+  const date = parseIsoDateLocal(fromDateIso);
+  date.setDate(date.getDate() + days);
+  return formatIsoDate(date);
+}
+
+/**
+ * Default "From" when recording monthly rent:
+ * - After the latest rent period (day after its end), or
+ * - Assignment lease from when no prior rent exists.
+ */
+export function calcDefaultRentPeriodStart(params: {
+  latestRent?: {
+    startDate: string;
+    endDate?: string | null;
+  } | null;
+  leaseFrom?: string | null;
+}) {
+  if (params.latestRent) {
+    const start = params.latestRent.startDate.slice(0, 10);
+    const periodEnd = params.latestRent.endDate
+      ? params.latestRent.endDate.slice(0, 10)
+      : calcMonthlyPeriodEnd(start);
+    return addDaysIso(periodEnd, 1);
+  }
+
+  if (params.leaseFrom) {
+    return params.leaseFrom.slice(0, 10);
+  }
+
+  return "";
+}
+
 /** Due date = period start (From) plus configured days from tenant. */
 export function calcDueDateFromPeriodStart(fromDateIso: string, daysAfterStart: number) {
   const from = parseIsoDateLocal(fromDateIso);
   from.setDate(from.getDate() + daysAfterStart);
   return formatIsoDate(from);
 }
+
+/** Lease end = 11 months after lease start, minus one day (11-month term). */
+export function calcLeaseToFromLeaseFrom(leaseFromIso: string) {
+  const from = parseIsoDateLocal(leaseFromIso);
+  const leaseTo = new Date(from.getFullYear(), from.getMonth() + 11, from.getDate());
+  leaseTo.setDate(leaseTo.getDate() - 1);
+  return formatIsoDate(leaseTo);
+}
+
+/** Inclusive day count between two ISO dates (both endpoints count). */
+export function calcInclusiveDays(startDateIso: string, endDateIso: string) {
+  const start = parseIsoDateLocal(startDateIso);
+  const end = parseIsoDateLocal(endDateIso);
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.floor((end.getTime() - start.getTime()) / msPerDay) + 1;
+}
+
+/** Pro-rata base rent: (monthlyRent / 30) × days in period. */
+export function calcProrataMonthlyRent(
+  monthlyRent: number,
+  startDateIso: string,
+  endDateIso: string,
+) {
+  const days = calcInclusiveDays(startDateIso, endDateIso);
+  if (days <= 0) return 0;
+  return (monthlyRent / 30) * days;
+}
+
+export type ProrataPeriod = {
+  startDateIso: string;
+  endDateIso: string;
+};
 
 export function lastDayOfMonth(reference = new Date()) {
   const year = reference.getFullYear();
@@ -159,7 +224,20 @@ export function calcRentBreakdown(input: {
   maintenance: number;
   misc: number;
   rates: BuildingUtilityRateSnapshot;
+  prorataPeriod?: ProrataPeriod;
 }) {
+  const prorataDays =
+    input.prorataPeriod != null
+      ? calcInclusiveDays(input.prorataPeriod.startDateIso, input.prorataPeriod.endDateIso)
+      : null;
+  const effectiveMonthlyRent =
+    input.prorataPeriod != null
+      ? calcProrataMonthlyRent(
+          input.monthlyRent,
+          input.prorataPeriod.startDateIso,
+          input.prorataPeriod.endDateIso,
+        )
+      : input.monthlyRent;
   const electricityDelta = Math.max(
     0,
     input.electricityUnits - input.baselineElectricityUnits,
@@ -169,7 +247,7 @@ export function calcRentBreakdown(input: {
   const gasCharge = gasDelta * input.rates.gasUnitRate;
   const cleaningCharge = input.rates.cleaningCharge;
   const total =
-    input.monthlyRent +
+    effectiveMonthlyRent +
     electricityCharge +
     gasCharge +
     cleaningCharge +
@@ -177,7 +255,11 @@ export function calcRentBreakdown(input: {
     input.misc;
 
   return {
-    monthlyRent: input.monthlyRent,
+    monthlyRent: effectiveMonthlyRent,
+    fullMonthlyRent: input.monthlyRent,
+    prorataDays,
+    prorataDailyRate: input.prorataPeriod != null ? input.monthlyRent / 30 : null,
+    isProrata: input.prorataPeriod != null,
     electricityUnits: input.electricityUnits,
     electricityBaseline: input.baselineElectricityUnits,
     electricityDelta,
@@ -205,6 +287,7 @@ export function calcTotalRent(input: {
   maintenance: number;
   misc: number;
   rates: BuildingUtilityRateSnapshot;
+  prorataPeriod?: ProrataPeriod;
 }) {
   return calcRentBreakdown(input).total;
 }
@@ -217,6 +300,8 @@ export function breakdownFromRentRow(
   row: {
     id?: string;
     startDate: string;
+    endDate?: string | null;
+    isExitRent?: boolean;
     rent: string | number;
     electricityUnits?: string | number | null;
     gasUnits?: string | number | null;
@@ -255,6 +340,13 @@ export function breakdownFromRentRow(
   const rates = context?.rates ?? parseUtilityRateSnapshot(row.utilityRateSnapshot);
   if (!rates) return null;
 
+  const startDateIso = row.startDate.slice(0, 10);
+  const endDateIso = row.endDate?.slice(0, 10);
+  const prorataPeriod =
+    row.isExitRent && endDateIso
+      ? { startDateIso, endDateIso }
+      : undefined;
+
   return calcRentBreakdown({
     monthlyRent: toNumber(row.rent),
     electricityUnits: toNumber(row.electricityUnits),
@@ -264,5 +356,6 @@ export function breakdownFromRentRow(
     maintenance: toNumber(row.maintenance),
     misc: toNumber(row.misc),
     rates,
+    prorataPeriod,
   });
 }

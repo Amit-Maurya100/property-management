@@ -11,8 +11,18 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ["whatsapp-web.js", "puppeteer", "sharp"],
   turbopack: {
     root: process.cwd(),
+  },
+  async redirects() {
+    return [
+      {
+        source: "/rent/whatsapp",
+        destination: "/rent/notifications",
+        permanent: true,
+      },
+    ];
   },
   async headers() {
     return [

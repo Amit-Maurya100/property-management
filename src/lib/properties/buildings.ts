@@ -1,4 +1,10 @@
 import { prisma } from "@/lib/db";
+import {
+  SERVER_CACHE_TTL,
+  cachedQuery,
+  invalidatePropertyCache,
+  propertyCacheKey,
+} from "@/lib/api/server-cache";
 import { parseId, type IdInput } from "@/lib/ids";
 import type { PropertyAccessContext } from "@/lib/properties/ownership";
 import {
@@ -21,14 +27,19 @@ export async function listBuildings(
   filters: { propertyId?: bigint } = {},
 ) {
   const propertyFilter = ownerPropertyFilter(ctx);
-  return prisma.building.findMany({
-    where: {
-      ...(filters.propertyId ? { propertyId: filters.propertyId } : {}),
-      property: propertyFilter,
-    },
-    select: buildingSelect,
-    orderBy: { name: "asc" },
-  });
+  return cachedQuery(
+    propertyCacheKey(ctx.userId, "buildings", filters),
+    SERVER_CACHE_TTL.reference,
+    () =>
+      prisma.building.findMany({
+        where: {
+          ...(filters.propertyId ? { propertyId: filters.propertyId } : {}),
+          property: propertyFilter,
+        },
+        select: buildingSelect,
+        orderBy: { name: "asc" },
+      }),
+  );
 }
 
 export async function getBuilding(ctx: PropertyAccessContext, id: IdInput) {
@@ -47,10 +58,12 @@ export async function createBuilding(
   data: { propertyId: bigint; name: string },
 ) {
   await assertUserOwnsProperty(ctx, data.propertyId);
-  return prisma.building.create({
+  const building = await prisma.building.create({
     data: { propertyId: data.propertyId, name: data.name },
     select: buildingSelect,
   });
+  invalidatePropertyCache(ctx.userId);
+  return building;
 }
 
 export async function updateBuilding(
@@ -61,15 +74,18 @@ export async function updateBuilding(
   const buildingId = parseId(id);
   await assertUserOwnsBuilding(ctx, buildingId);
   if (data.propertyId) await assertUserOwnsProperty(ctx, data.propertyId);
-  return prisma.building.update({
+  const building = await prisma.building.update({
     where: { id: buildingId },
     data: { name: data.name, propertyId: data.propertyId },
     select: buildingSelect,
   });
+  invalidatePropertyCache(ctx.userId);
+  return building;
 }
 
 export async function deleteBuilding(ctx: PropertyAccessContext, id: IdInput) {
   const buildingId = parseId(id);
   await assertUserOwnsBuilding(ctx, buildingId);
   await prisma.building.delete({ where: { id: buildingId } });
+  invalidatePropertyCache(ctx.userId);
 }

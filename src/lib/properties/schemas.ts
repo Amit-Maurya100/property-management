@@ -143,11 +143,16 @@ export const createTenantSchema = z.object({
   idDocument: trimmedString.max(100).optional(),
   unitId: idSchema.optional(),
   pictureUrl: trimmedString.max(2048).optional(),
+  securityDeposit: z.coerce.number().nonnegative().optional(),
 });
 
 export const updateTenantSchema = createTenantSchema
   .extend({
     unitId: z.union([idSchema, z.null()]).optional(),
+    securityDeposit: z.preprocess(
+      emptyToNull,
+      z.union([z.null(), z.coerce.number().nonnegative()]).optional(),
+    ),
   })
   .partial();
 
@@ -258,16 +263,109 @@ export const createRentSchema = z.object({
   dueDate: z.coerce.date(),
   utilityBaseline: utilityBaselineSchema.optional(),
   utilityRateSnapshot: utilityRateSnapshotSchema.optional(),
+  isExitRent: z.boolean().optional(),
+});
+
+export const tenantExitSchema = z.object({
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date(),
+  electricityUnits: z.coerce.number().nonnegative().optional(),
+  gasUnits: z.coerce.number().nonnegative().optional(),
+  maintenance: z.coerce.number().nonnegative().optional(),
+  misc: z.coerce.number().nonnegative().optional(),
+  dueDate: z.coerce.date().optional(),
 });
 
 export const updateRentSchema = createRentSchema.partial();
 
 export const paymentModeEnum = z.enum(["CASH", "CHEQUE", "NEFT", "UPI", "OTHER"]);
+export const paymentAccountNameEnum = z.enum(["AMIT", "SARITA", "PYARI", "DN", "NONE"]);
 
 export const createPaymentSchema = z.object({
   rentId: idSchema,
   amount: z.coerce.number().positive(),
   mode: paymentModeEnum,
+  accountName: paymentAccountNameEnum.default("NONE"),
   paidAt: z.coerce.date().optional(),
   notes: trimmedString.max(2000).optional(),
 });
+
+const rentPaymentAccountLabel = trimmedString.min(1).max(100);
+
+export const createBankPaymentAccountSchema = z.object({
+  accountType: z.literal("BANK"),
+  label: rentPaymentAccountLabel,
+  accountHolderName: trimmedString.min(1).max(255),
+  bankName: trimmedString.min(1).max(255),
+  accountNumber: trimmedString.min(1).max(50),
+  branch: trimmedString.min(1).max(255),
+  ifscCode: trimmedString.min(1).max(11),
+  isActive: z.boolean().optional(),
+  sortOrder: z.coerce.number().int().min(0).optional(),
+});
+
+export const createUpiPaymentAccountSchema = z.object({
+  accountType: z.literal("UPI"),
+  label: rentPaymentAccountLabel,
+  upiId: trimmedString.min(1).max(255),
+  upiBarcodeUrl: trimmedString.max(2048).optional().nullable(),
+  isActive: z.boolean().optional(),
+  sortOrder: z.coerce.number().int().min(0).optional(),
+});
+
+export const createRentPaymentAccountSchema = z.discriminatedUnion("accountType", [
+  createBankPaymentAccountSchema,
+  createUpiPaymentAccountSchema,
+]);
+
+export const updateRentPaymentAccountSchema = z
+  .object({
+    label: rentPaymentAccountLabel.optional(),
+    accountHolderName: trimmedString.max(255).optional(),
+    bankName: trimmedString.max(255).optional(),
+    accountNumber: trimmedString.max(50).optional(),
+    branch: trimmedString.max(255).optional(),
+    ifscCode: trimmedString.max(11).optional(),
+    upiId: trimmedString.max(255).optional(),
+    upiBarcodeUrl: trimmedString.max(2048).optional().nullable(),
+    isActive: z.boolean().optional(),
+    sortOrder: z.coerce.number().int().min(0).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one field is required",
+  });
+
+export const setTenantPaymentAccountsSchema = z.object({
+  accountIds: z.array(idSchema),
+});
+
+export const rentReportPeriodModeEnum = z.enum(["monthly", "quarterly", "yearly", "custom"]);
+
+export const rentReportQuerySchema = z
+  .object({
+    mode: rentReportPeriodModeEnum,
+    month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+    year: z.coerce.number().int().min(2000).max(2100).optional(),
+    quarter: z.coerce.number().int().min(1).max(4).optional(),
+    dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    tenantId: idSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.mode === "monthly" && !data.month) {
+      ctx.addIssue({ code: "custom", message: "month is required", path: ["month"] });
+    }
+    if (data.mode === "quarterly" && (!data.year || !data.quarter)) {
+      ctx.addIssue({ code: "custom", message: "year and quarter are required", path: ["year"] });
+    }
+    if (data.mode === "yearly" && !data.year) {
+      ctx.addIssue({ code: "custom", message: "year is required", path: ["year"] });
+    }
+    if (data.mode === "custom" && (!data.dateFrom || !data.dateTo)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "dateFrom and dateTo are required",
+        path: ["dateFrom"],
+      });
+    }
+  });

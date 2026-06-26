@@ -6,6 +6,8 @@ type RowActionsProps = {
   onEdit: () => void;
   onDelete: () => void;
   hideDelete?: boolean;
+  deleting?: boolean;
+  disabled?: boolean;
 };
 
 export function RowActions({
@@ -14,8 +16,11 @@ export function RowActions({
   onEdit,
   onDelete,
   hideDelete = false,
+  deleting = false,
+  disabled = false,
 }: RowActionsProps) {
   const showDelete = canDelete && !hideDelete;
+  const isBusy = disabled || deleting;
 
   if (!canUpdate && !showDelete) {
     return <span className="text-slate-500">—</span>;
@@ -24,13 +29,23 @@ export function RowActions({
   return (
     <div className="space-x-2">
       {canUpdate ? (
-        <button type="button" className={buttonSecondaryClass} onClick={onEdit}>
+        <button
+          type="button"
+          className={buttonSecondaryClass}
+          onClick={onEdit}
+          disabled={isBusy}
+        >
           Edit
         </button>
       ) : null}
       {showDelete ? (
-        <button type="button" className={buttonDangerClass} onClick={onDelete}>
-          Delete
+        <button
+          type="button"
+          className={buttonDangerClass}
+          onClick={onDelete}
+          disabled={isBusy}
+        >
+          {deleting ? "Deleting..." : "Delete"}
         </button>
       ) : null}
     </div>

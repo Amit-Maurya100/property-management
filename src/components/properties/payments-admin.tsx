@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, Fragment, useMemo, useRef, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
@@ -8,10 +8,16 @@ import {
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
 import { PaymentBreakdownPanel } from "@/components/properties/payment-breakdown-panel";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { useCachedList } from "@/hooks/use-cached-list";
+import { fetchMutation } from "@/lib/api/client-cache";
 import {
   formatMoney,
+  PAYMENT_ACCOUNT_NAMES,
+  paymentAccountNameLabel,
   paymentModeLabel,
   paymentStatusLabel,
+  type PaymentAccountNameValue,
   type PaymentModeValue,
 } from "@/lib/properties/payment-calculations";
 import type { ResourceGrants } from "@/lib/permissions/grants";
@@ -23,6 +29,7 @@ type PaymentRow = {
   id: string;
   amount: string;
   mode: PaymentModeValue;
+  accountName: PaymentAccountNameValue;
   appliedToRent: string;
   toAdvance: string;
   paidAt: string;
@@ -59,6 +66,7 @@ const PAYMENT_MODES: PaymentModeValue[] = ["CASH", "CHEQUE", "NEFT", "UPI", "OTH
 const emptyPaymentForm = {
   amount: "",
   mode: "CASH" as PaymentModeValue,
+  accountName: "NONE" as PaymentAccountNameValue,
   paidAt: "",
   notes: "",
 };
@@ -79,49 +87,89 @@ function statusClass(status: RentPaymentRow["paymentStatus"]) {
 }
 
 export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
-  const [rows, setRows] = useState<RentPaymentRow[]>([]);
-  const [tenants, setTenants] = useState<Array<{ id: string; firstName: string; lastName: string }>>(
-    [],
-  );
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [filterTenantId, setFilterTenantId] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [payingRentId, setPayingRentId] = useState<string | null>(null);
   const [viewingRentId, setViewingRentId] = useState<string | null>(null);
   const [showPaymentBreakdown, setShowPaymentBreakdown] = useState(false);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
+  const [submitting, setSubmitting] = useState(false);
+  const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
+  const submittingRef = useRef(false);
+  const deletingRef = useRef(false);
+
+  const rentsUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    if (filterTenantId) params.set("tenantId", filterTenantId);
+    if (showAll) params.set("status", "all");
+    return `/api/payments/rents?${params.toString()}`;
+  }, [filterTenantId, showAll]);
+
+  const {
+    items: rows,
+    loading,
+    error,
+    setError,
+    invalidate,
+  } = useCachedList<RentPaymentRow>(rentsUrl);
+  const { data: tenants = [] } = useCachedFetch<
+    Array<{ id: string; firstName: string; lastName: string }>
+  >("/api/tenants");
 
   const payingRent = useMemo(
     () => rows.find((row) => row.id === payingRentId) ?? null,
     [rows, payingRentId],
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  async function handlePaymentSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!payingRentId || submittingRef.current) return;
     setError(null);
+    submittingRef.current = true;
+    setSubmitting(true);
+
     try {
-      const params = new URLSearchParams();
-      if (filterTenantId) params.set("tenantId", filterTenantId);
-      if (showAll) params.set("status", "all");
-
-      const [rentsRes, tenantsRes] = await Promise.all([
-        fetch(`/api/payments/rents?${params.toString()}`),
-        fetch("/api/tenants"),
-      ]);
-      if (!rentsRes.ok) throw new Error((await rentsRes.json()).error);
-      setRows(await rentsRes.json());
-      if (tenantsRes.ok) setTenants(await tenantsRes.json());
+      await fetchMutation("/api/payments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rentId: payingRentId,
+          amount: Number(paymentForm.amount),
+          mode: paymentForm.mode,
+          accountName: paymentForm.accountName,
+          paidAt: paymentForm.paidAt || undefined,
+          notes: paymentForm.notes || undefined,
+        }),
+      });
+      setPayingRentId(null);
+      setShowPaymentBreakdown(false);
+      setPaymentForm(emptyPaymentForm);
+      await invalidate();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
+      setError(err instanceof Error ? err.message : "Payment failed");
     } finally {
-      setLoading(false);
+      submittingRef.current = false;
+      setSubmitting(false);
     }
-  }, [filterTenantId, showAll]);
+  }
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  async function handleDeletePayment(paymentId: string) {
+    if (!confirm("Delete this payment?")) return;
+    if (deletingRef.current) return;
+    setError(null);
+    deletingRef.current = true;
+    setDeletingPaymentId(paymentId);
+
+    try {
+      await fetchMutation(`/api/payments/${paymentId}`, { method: "DELETE" });
+      await invalidate();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      deletingRef.current = false;
+      setDeletingPaymentId(null);
+    }
+  }
 
   function openPaymentForm(row: RentPaymentRow) {
     setPayingRentId(row.id);
@@ -132,33 +180,6 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
       amount: row.balanceDue > 0 ? String(row.balanceDue) : "",
       paidAt: new Date().toISOString().slice(0, 10),
     });
-  }
-
-  async function handlePaymentSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!payingRentId) return;
-    setError(null);
-
-    try {
-      const res = await fetch("/api/payments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rentId: payingRentId,
-          amount: Number(paymentForm.amount),
-          mode: paymentForm.mode,
-          paidAt: paymentForm.paidAt || undefined,
-          notes: paymentForm.notes || undefined,
-        }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error);
-      setPayingRentId(null);
-      setShowPaymentBreakdown(false);
-      setPaymentForm(emptyPaymentForm);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Payment failed");
-    }
   }
 
   return (
@@ -209,6 +230,7 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
           onSubmit={handlePaymentSubmit}
           className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-6"
         >
+          <fieldset disabled={submitting} className="min-w-0 border-0 p-0">
           <h2 className="text-lg font-medium">Record payment</h2>
           <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-slate-400">
@@ -230,6 +252,12 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
           {showPaymentBreakdown ? (
             <PaymentBreakdownPanel
               rentBreakdown={payingRent.rentBreakdown}
+              rentBreakdownSubtitle={[
+                tenantName(payingRent.tenant),
+                payingRent.endDate
+                  ? `${formatDate(payingRent.startDate)} to ${formatDate(payingRent.endDate)}`
+                  : formatDate(payingRent.startDate),
+              ].join(" · ")}
               priorBalance={toMoney(payingRent.priorBalance)}
               advanceBalance={toMoney(payingRent.tenant.advanceBalance)}
               paidTotal={payingRent.paidTotal}
@@ -274,6 +302,26 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                 ))}
               </select>
             </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-300">Account name</label>
+              <select
+                required
+                value={paymentForm.accountName}
+                onChange={(e) =>
+                  setPaymentForm((prev) => ({
+                    ...prev,
+                    accountName: e.target.value as PaymentAccountNameValue,
+                  }))
+                }
+                className={inputClass}
+              >
+                {PAYMENT_ACCOUNT_NAMES.map((accountName) => (
+                  <option key={accountName} value={accountName}>
+                    {paymentAccountNameLabel(accountName)}
+                  </option>
+                ))}
+              </select>
+            </div>
             <DatePickerField
               label="Paid on"
               value={paymentForm.paidAt}
@@ -291,8 +339,8 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
           </div>
 
           <div className="mt-4 flex gap-3">
-            <button type="submit" className={buttonPrimaryClass}>
-              Save payment
+            <button type="submit" className={buttonPrimaryClass} disabled={submitting}>
+              {submitting ? "Saving payment..." : "Save payment"}
             </button>
             <button
               type="button"
@@ -306,6 +354,7 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
               Cancel
             </button>
           </div>
+          </fieldset>
         </form>
       ) : null}
 
@@ -327,7 +376,7 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
             </tr>
           </thead>
           <tbody>
-            {loading ? (
+            {loading && rows.length === 0 ? (
               <tr>
                 <td colSpan={11} className="px-4 py-8 text-slate-400">
                   Loading...
@@ -367,6 +416,7 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                             <button
                               type="button"
                               className={buttonSecondaryClass}
+                              disabled={submitting || deletingPaymentId !== null}
                               onClick={() => openPaymentForm(row)}
                             >
                               Pay
@@ -395,6 +445,7 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                                 <tr>
                                   <th className="px-3 py-2">Date</th>
                                   <th className="px-3 py-2">Mode</th>
+                                  <th className="px-3 py-2">Account</th>
                                   <th className="px-3 py-2">Amount</th>
                                   <th className="px-3 py-2">To rent</th>
                                   <th className="px-3 py-2">To advance</th>
@@ -409,6 +460,9 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                                   <tr key={payment.id} className="border-t border-slate-800">
                                     <td className="px-3 py-2">{formatDate(payment.paidAt)}</td>
                                     <td className="px-3 py-2">{paymentModeLabel(payment.mode)}</td>
+                                    <td className="px-3 py-2">
+                                      {paymentAccountNameLabel(payment.accountName ?? "NONE")}
+                                    </td>
                                     <td className="px-3 py-2">{formatMoney(toMoney(payment.amount))}</td>
                                     <td className="px-3 py-2">
                                       {formatMoney(toMoney(payment.appliedToRent))}
@@ -422,20 +476,14 @@ export function PaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                                         <button
                                           type="button"
                                           className={buttonSecondaryClass}
-                                          onClick={async () => {
-                                            if (!confirm("Delete this payment?")) return;
-                                            const res = await fetch(
-                                              `/api/payments/${payment.id}`,
-                                              { method: "DELETE" },
-                                            );
-                                            if (!res.ok) {
-                                              setError((await res.json()).error);
-                                              return;
-                                            }
-                                            await load();
-                                          }}
+                                          disabled={
+                                            deletingPaymentId === payment.id || submitting
+                                          }
+                                          onClick={() => void handleDeletePayment(payment.id)}
                                         >
-                                          Delete
+                                          {deletingPaymentId === payment.id
+                                            ? "Deleting..."
+                                            : "Delete"}
                                         </button>
                                       </td>
                                     ) : null}

@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { getAppNavContext, getDefaultHomePath } from "@/lib/navigation/nav";
 import { AppHeader } from "@/components/layout/app-header";
 import { SiteFooter } from "@/components/layout/site-footer";
+import { contentWidthClass } from "@/lib/layout/content-width";
 import { redirect } from "next/navigation";
 
 export default async function ProtectedLayout({
@@ -25,7 +26,7 @@ export default async function ProtectedLayout({
         navContext={navContext}
         homeHref={homeHref}
       />
-      <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-8">{children}</main>
+      <main className={`mx-auto w-full ${contentWidthClass} flex-1 px-4 py-8 sm:px-6`}>{children}</main>
       <SiteFooter />
     </div>
   );

@@ -32,6 +32,12 @@ export const GST_NAV_ITEMS: AdminNavItem[] = [
     action: "read",
   },
   {
+    href: "/hub/gst/payments",
+    label: "Payments",
+    resource: "gst_payment",
+    action: "read",
+  },
+  {
     href: "/hub/gst/reports",
     label: "Report",
     resource: "gst_report",

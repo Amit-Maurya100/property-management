@@ -8,5 +8,8 @@ export const PROPERTY_NAV_ITEMS: AdminNavItem[] = [
   { href: "/amenities", label: "Amenities", resource: "amenity", action: "read" },
   { href: "/tenants", label: "Tenants", resource: "tenant", action: "read" },
   { href: "/rent", label: "Rent", resource: "rent", action: "read" },
+  { href: "/rent/reports", label: "Rent Report", resource: "rent", action: "read" },
+  { href: "/rent/payment-accounts", label: "Payment Accounts", resource: "payment", action: "read" },
+  { href: "/rent/notifications", label: "Notifications", resource: "rent", action: "read" },
   { href: "/payments", label: "Payments", resource: "payment", action: "read" },
 ];

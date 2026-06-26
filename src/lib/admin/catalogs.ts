@@ -1,4 +1,10 @@
 import { prisma } from "@/lib/db";
+import {
+  SERVER_CACHE_TTL,
+  cachedQuery,
+  catalogCacheKey,
+  invalidateCatalogCache,
+} from "@/lib/api/server-cache";
 import { parseId, type IdInput } from "@/lib/ids";
 
 const catalogSelect = {
@@ -14,11 +20,16 @@ const catalogSelect = {
 type CatalogClient = Pick<typeof prisma, "resource" | "action">;
 
 export async function listResources(activeOnly = false) {
-  return prisma.resource.findMany({
-    where: activeOnly ? { isActive: true } : undefined,
-    select: catalogSelect,
-    orderBy: { name: "asc" },
-  });
+  return cachedQuery(
+    catalogCacheKey("resources", { active: activeOnly }),
+    SERVER_CACHE_TTL.catalog,
+    () =>
+      prisma.resource.findMany({
+        where: activeOnly ? { isActive: true } : undefined,
+        select: catalogSelect,
+        orderBy: { name: "asc" },
+      }),
+  );
 }
 
 export async function getResource(id: IdInput) {
@@ -44,7 +55,7 @@ export async function createResource(data: {
     throw new Error("CONFLICT:Resource name already exists");
   }
 
-  return prisma.resource.create({
+  const resource = await prisma.resource.create({
     data: {
       name: data.name,
       description: data.description,
@@ -52,6 +63,8 @@ export async function createResource(data: {
     },
     select: catalogSelect,
   });
+  invalidateCatalogCache();
+  return resource;
 }
 
 export async function updateResource(
@@ -74,8 +87,8 @@ export async function updateResource(
     }
   }
 
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.resource.update({
+  const updated = await prisma.$transaction(async (tx) => {
+    const next = await tx.resource.update({
       where: { id: resourceId },
       data: {
         ...(data.name !== undefined ? { name: data.name } : {}),
@@ -92,8 +105,10 @@ export async function updateResource(
       });
     }
 
-    return updated;
+    return next;
   });
+  invalidateCatalogCache();
+  return updated;
 }
 
 export async function deleteResource(id: IdInput) {
@@ -103,14 +118,20 @@ export async function deleteResource(id: IdInput) {
     throw new Error("BAD_REQUEST:Cannot delete resource used by permissions");
   }
   await prisma.resource.delete({ where: { id: resourceId } });
+  invalidateCatalogCache();
 }
 
 export async function listActions(activeOnly = false) {
-  return prisma.action.findMany({
-    where: activeOnly ? { isActive: true } : undefined,
-    select: catalogSelect,
-    orderBy: { name: "asc" },
-  });
+  return cachedQuery(
+    catalogCacheKey("actions", { active: activeOnly }),
+    SERVER_CACHE_TTL.catalog,
+    () =>
+      prisma.action.findMany({
+        where: activeOnly ? { isActive: true } : undefined,
+        select: catalogSelect,
+        orderBy: { name: "asc" },
+      }),
+  );
 }
 
 export async function getAction(id: IdInput) {
@@ -136,7 +157,7 @@ export async function createAction(data: {
     throw new Error("CONFLICT:Action name already exists");
   }
 
-  return prisma.action.create({
+  const action = await prisma.action.create({
     data: {
       name: data.name,
       description: data.description,
@@ -144,6 +165,8 @@ export async function createAction(data: {
     },
     select: catalogSelect,
   });
+  invalidateCatalogCache();
+  return action;
 }
 
 export async function updateAction(
@@ -166,8 +189,8 @@ export async function updateAction(
     }
   }
 
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.action.update({
+  const updated = await prisma.$transaction(async (tx) => {
+    const next = await tx.action.update({
       where: { id: actionId },
       data: {
         ...(data.name !== undefined ? { name: data.name } : {}),
@@ -184,8 +207,10 @@ export async function updateAction(
       });
     }
 
-    return updated;
+    return next;
   });
+  invalidateCatalogCache();
+  return updated;
 }
 
 export async function deleteAction(id: IdInput) {
@@ -195,6 +220,7 @@ export async function deleteAction(id: IdInput) {
     throw new Error("BAD_REQUEST:Cannot delete action used by permissions");
   }
   await prisma.action.delete({ where: { id: actionId } });
+  invalidateCatalogCache();
 }
 
 export async function resolveResourceAndAction(

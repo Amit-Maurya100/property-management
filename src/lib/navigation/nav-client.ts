@@ -7,6 +7,7 @@ export type AppNavContext = {
   adminItems: AppNavItem[];
   propertyItems: AppNavItem[];
   gstItems: AppNavItem[];
+  tenantPortalItems: AppNavItem[];
 };
 
 export function getAppNavItemsForSection(
@@ -21,6 +22,11 @@ export function getAppNavItemsForSection(
   }
   if (section === "gst") {
     return context.gstItems.length > 0 ? [home, ...context.gstItems] : [home];
+  }
+  if (section === "portal") {
+    return context.tenantPortalItems.length > 0
+      ? [home, ...context.tenantPortalItems]
+      : [home];
   }
   return [home, ...context.propertyItems];
 }

@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
+import { resolveUserId, type IdInput } from "@/lib/ids";
 import { normalizeGstNumber } from "@/lib/gst/gst-number";
 
 const organizationSelect = {
@@ -24,9 +25,10 @@ const organizationSelect = {
   },
 } as const;
 
-export async function getOrganizationForUser(userId: bigint) {
+export async function getOrganizationForUser(userId: IdInput) {
+  const id = await resolveUserId(userId);
   return prisma.organization.findUnique({
-    where: { ownerId: userId },
+    where: { ownerId: id },
     select: organizationSelect,
   });
 }

@@ -13,10 +13,55 @@ import {
 } from "@/lib/properties/building-utility-rates";
 import { getActiveTenantAssignment } from "@/lib/properties/tenant-assignments";
 import { carryForwardTenantBalance } from "@/lib/properties/payments";
+import { sendRentGeneratedEmail } from "@/lib/email/send-rent-generated-email";
+import { sendRentGeneratedWhatsApp } from "@/lib/whatsapp/send-rent-generated-whatsapp";
 import {
   calcTotalRent,
   resolveUtilityBaselines,
+  type ProrataPeriod,
 } from "@/lib/properties/rent-calculations";
+
+function prorataPeriodForRent(params: {
+  isExitRent: boolean;
+  startDate: Date;
+  endDate?: Date | null;
+}): ProrataPeriod | undefined {
+  if (!params.isExitRent || !params.endDate) return undefined;
+  return {
+    startDateIso: params.startDate.toISOString().slice(0, 10),
+    endDateIso: params.endDate.toISOString().slice(0, 10),
+  };
+}
+
+function computeRentTotal(params: {
+  monthlyRent: number;
+  startDate: Date;
+  endDate?: Date | null;
+  isExitRent: boolean;
+  electricityUnits: number;
+  gasUnits: number;
+  baselineElectricityUnits: number;
+  baselineGasUnits: number;
+  maintenance: number;
+  misc: number;
+  rates: {
+    electricityUnitRate: number;
+    gasUnitRate: number;
+    cleaningCharge: number;
+  };
+}) {
+  return calcTotalRent({
+    monthlyRent: params.monthlyRent,
+    electricityUnits: params.electricityUnits,
+    gasUnits: params.gasUnits,
+    baselineElectricityUnits: params.baselineElectricityUnits,
+    baselineGasUnits: params.baselineGasUnits,
+    maintenance: params.maintenance,
+    misc: params.misc,
+    rates: params.rates,
+    prorataPeriod: prorataPeriodForRent(params),
+  });
+}
 
 const rentSelect = {
   id: true,
@@ -34,6 +79,7 @@ const rentSelect = {
   dueDate: true,
   utilityBaseline: true,
   utilityRateSnapshot: true,
+  isExitRent: true,
   createdAt: true,
   updatedAt: true,
   tenant: {
@@ -146,6 +192,7 @@ export async function createRent(
       gasUnitRate: number;
       cleaningCharge: number;
     };
+    isExitRent?: boolean;
   },
 ) {
   await assertUserOwnsTenant(ctx, data.tenantId);
@@ -204,8 +251,11 @@ export async function createRent(
     periodStartDate: data.startDate.toISOString().slice(0, 10),
   });
 
-  const computedTotalRent = calcTotalRent({
+  const computedTotalRent = computeRentTotal({
     monthlyRent: data.rent,
+    startDate: data.startDate,
+    endDate: data.endDate,
+    isExitRent: data.isExitRent ?? false,
     electricityUnits: data.electricityUnits ?? 0,
     gasUnits: data.gasUnits ?? 0,
     baselineElectricityUnits: baseline.electricityUnits,
@@ -215,7 +265,7 @@ export async function createRent(
     rates: utilityRateSnapshot,
   });
 
-  return prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     const priorBalance = await carryForwardTenantBalance(tx, data.tenantId);
 
     return tx.rent.create({
@@ -236,11 +286,30 @@ export async function createRent(
         utilityBaseline: data.utilityBaseline ?? undefined,
         utilityRateSnapshot,
         priorBalance: new Prisma.Decimal(priorBalance),
+        isExitRent: data.isExitRent ?? false,
         paymentStatus: "PENDING",
       },
       select: rentSelect,
     });
   });
+
+  void dispatchRentGeneratedNotifications(created.id);
+
+  return created;
+}
+
+async function dispatchRentGeneratedNotifications(rentId: bigint) {
+  try {
+    await sendRentGeneratedEmail(rentId);
+  } catch (error) {
+    console.error("Failed to send rent generated email", error);
+  }
+
+  try {
+    await sendRentGeneratedWhatsApp(rentId);
+  } catch (error) {
+    console.error("Failed to send rent generated WhatsApp message", error);
+  }
 }
 
 export async function updateRent(
@@ -275,6 +344,8 @@ export async function updateRent(
       tenantAssignmentId: true,
       startDate: true,
       rent: true,
+      endDate: true,
+      isExitRent: true,
       electricityUnits: true,
       gasUnits: true,
       maintenance: true,
@@ -344,6 +415,8 @@ export async function updateRent(
   });
 
   const monthlyRent = data.rent ?? Number(existing.rent);
+  const endDate = data.endDate !== undefined ? data.endDate : existing.endDate;
+  const isExitRent = existing.isExitRent;
   const electricityUnits =
     data.electricityUnits != null
       ? data.electricityUnits
@@ -361,8 +434,11 @@ export async function updateRent(
   const misc =
     data.misc != null ? data.misc : existing.misc != null ? Number(existing.misc) : 0;
 
-  const computedTotalRent = calcTotalRent({
+  const computedTotalRent = computeRentTotal({
     monthlyRent,
+    startDate,
+    endDate,
+    isExitRent,
     electricityUnits,
     gasUnits,
     baselineElectricityUnits: baseline.electricityUnits,

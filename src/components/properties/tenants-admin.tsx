@@ -1,13 +1,19 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
+import { TenantExitPanel } from "@/components/properties/tenant-exit-panel";
+import { TenantPaymentAccountsPanel } from "@/components/properties/tenant-payment-accounts-panel";
 import { RowActions } from "@/components/admin/row-actions";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { useCachedList } from "@/hooks/use-cached-list";
+import { formatMoney, toNumber, calcLeaseToFromLeaseFrom } from "@/lib/properties/rent-calculations";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 type AssignmentRow = {
@@ -42,6 +48,7 @@ type TenantRow = {
   phone?: string | null;
   idDocument?: string | null;
   pictureUrl?: string | null;
+  securityDeposit?: string | null;
   unit?: {
     id: string;
     unitNumber: string;
@@ -66,6 +73,13 @@ type UnitOption = {
   };
 };
 
+type TenantRentRow = {
+  id: string;
+  startDate: string;
+  electricityUnits?: string | null;
+  gasUnits?: string | null;
+};
+
 const emptyTenantForm = {
   firstName: "",
   lastName: "",
@@ -74,6 +88,7 @@ const emptyTenantForm = {
   idDocument: "",
   unitId: "",
   pictureUrl: "",
+  securityDeposit: "",
 };
 
 const emptyAssignmentForm = {
@@ -120,6 +135,41 @@ function tenantName(row: { firstName: string; lastName: string }) {
   return `${row.firstName} ${row.lastName}`;
 }
 
+function findLatestRentForTenant(rents: TenantRentRow[]) {
+  return [...rents].sort((a, b) => b.startDate.localeCompare(a.startDate))[0];
+}
+
+function utilityInitsFromLatestRent(rent?: TenantRentRow) {
+  if (!rent) {
+    return { initialElectricityUnits: "", initialGasUnits: "" };
+  }
+
+  return {
+    initialElectricityUnits:
+      rent.electricityUnits != null && rent.electricityUnits !== ""
+        ? String(rent.electricityUnits)
+        : "",
+    initialGasUnits:
+      rent.gasUnits != null && rent.gasUnits !== "" ? String(rent.gasUnits) : "",
+  };
+}
+
+function buildNewAssignmentForm(params: {
+  unitId: string;
+  isSubsequent: boolean;
+  tenantRents: TenantRentRow[];
+}) {
+  const utilityInits = params.isSubsequent
+    ? utilityInitsFromLatestRent(findLatestRentForTenant(params.tenantRents))
+    : { initialElectricityUnits: "", initialGasUnits: "" };
+
+  return {
+    ...emptyAssignmentForm,
+    unitId: params.unitId,
+    ...utilityInits,
+  };
+}
+
 function buildTenantPayload(
   form: typeof emptyTenantForm,
   options: { isUpdate: boolean },
@@ -132,6 +182,12 @@ function buildTenantPayload(
     idDocument: form.idDocument || undefined,
     pictureUrl: form.pictureUrl || undefined,
   };
+
+  if (form.securityDeposit !== "") {
+    payload.securityDeposit = Number(form.securityDeposit);
+  } else if (options.isUpdate) {
+    payload.securityDeposit = 0;
+  }
 
   if (form.unitId) {
     payload.unitId = form.unitId;
@@ -175,16 +231,41 @@ function buildAssignmentUpdatePayload(form: typeof emptyAssignmentForm) {
 }
 
 export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
-  const [tenants, setTenants] = useState<TenantRow[]>([]);
-  const [units, setUnits] = useState<UnitOption[]>([]);
-  const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editingTenant, setEditingTenant] = useState<TenantRow | null>(null);
   const [tenantForm, setTenantForm] = useState(emptyTenantForm);
   const [assignmentForm, setAssignmentForm] = useState(emptyAssignmentForm);
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState<AssignmentRow | null>(null);
+
+  const {
+    items: tenants,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save: saveTenant,
+    remove: removeTenant,
+    invalidate: invalidateTenants,
+  } = useCachedList<TenantRow>("/api/tenants");
+  const { data: units = [] } = useCachedFetch<UnitOption[]>("/api/units");
+
+  const assignmentsUrl = editingTenant
+    ? `/api/tenant-assignments?tenantId=${editingTenant.id}`
+    : "";
+  const {
+    items: assignments,
+    submitting: assignmentListSubmitting,
+    deletingId: deletingAssignmentId,
+    save: saveAssignment,
+    remove: removeAssignment,
+    invalidate: invalidateAssignments,
+  } = useCachedList<AssignmentRow>(assignmentsUrl, { enabled: !!editingTenant });
+
+  const tenantRentsUrl = editingTenant ? `/api/rents?tenantId=${editingTenant.id}` : "";
+  const { items: tenantRents } = useCachedList<TenantRentRow>(tenantRentsUrl, {
+    enabled: !!editingTenant,
+  });
 
   function closeAssignmentEditor() {
     setAssignmentForm(emptyAssignmentForm);
@@ -192,120 +273,57 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
     setEditingAssignment(null);
   }
 
-  const loadTenants = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [tenantsRes, unitsRes] = await Promise.all([
-        fetch("/api/tenants"),
-        fetch("/api/units"),
-      ]);
-      if (!tenantsRes.ok) throw new Error((await tenantsRes.json()).error);
-      setTenants(await tenantsRes.json());
-      if (unitsRes.ok) setUnits(await unitsRes.json());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const loadAssignments = useCallback(async (tenantId: string) => {
-    const res = await fetch(`/api/tenant-assignments?tenantId=${tenantId}`);
-    if (!res.ok) throw new Error((await res.json()).error);
-    const rows = await res.json();
-    setAssignments(rows);
-    return rows as AssignmentRow[];
-  }, []);
-
-  useEffect(() => {
-    void loadTenants();
-  }, [loadTenants]);
-
-  useEffect(() => {
-    if (!editingTenant) {
-      setAssignments([]);
-      closeAssignmentEditor();
-      return;
-    }
-    void loadAssignments(editingTenant.id).catch((err) => {
-      setError(err instanceof Error ? err.message : "Failed to load assignments");
-    });
-  }, [editingTenant, loadAssignments]);
-
   async function handleTenantSubmit(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
     setError(null);
     try {
-      const res = await fetch(
-        editingTenant ? `/api/tenants/${editingTenant.id}` : "/api/tenants",
-        {
-          method: editingTenant ? "PATCH" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            buildTenantPayload(tenantForm, { isUpdate: !!editingTenant }),
-          ),
-        },
-      );
-      if (!res.ok) throw new Error((await res.json()).error);
-      const saved = await res.json();
-      setEditingTenant(saved);
-      setTenantForm({
-        firstName: saved.firstName,
-        lastName: saved.lastName,
-        email: saved.email ?? "",
-        phone: saved.phone ?? "",
-        idDocument: saved.idDocument ?? "",
-        unitId: saved.unit?.id ?? "",
-        pictureUrl: saved.pictureUrl ?? "",
+      const saved = await saveTenant({
+        url: editingTenant ? `/api/tenants/${editingTenant.id}` : "/api/tenants",
+        method: editingTenant ? "PATCH" : "POST",
+        body: buildTenantPayload(tenantForm, { isUpdate: !!editingTenant }),
       });
-      await loadTenants();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
+      if (saved) {
+        setEditingTenant(saved);
+        setTenantForm({
+          firstName: saved.firstName,
+          lastName: saved.lastName,
+          email: saved.email ?? "",
+          phone: saved.phone ?? "",
+          idDocument: saved.idDocument ?? "",
+          unitId: saved.unit?.id ?? "",
+          pictureUrl: saved.pictureUrl ?? "",
+          securityDeposit: saved.securityDeposit ? String(saved.securityDeposit) : "",
+        });
+      }
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
   async function handleAssignmentSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!editingTenant) return;
+    if (!editingTenant || assignmentListSubmitting) return;
     setError(null);
+
     try {
       const isUpdate = editingAssignment != null;
-      const res = await fetch(
-        isUpdate
+      await saveAssignment({
+        url: isUpdate
           ? `/api/tenant-assignments/${editingAssignment.id}`
           : "/api/tenant-assignments",
-        {
-          method: isUpdate ? "PATCH" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            isUpdate
-              ? buildAssignmentUpdatePayload(assignmentForm)
-              : buildAssignmentCreatePayload(editingTenant.id, assignmentForm),
-          ),
-        },
-      );
-      if (!res.ok) throw new Error((await res.json()).error);
-      const saved = (await res.json()) as AssignmentRow;
-      closeAssignmentEditor();
-      const tenantsRes = await fetch("/api/tenants");
-      if (tenantsRes.ok) {
-        const tenantsData = (await tenantsRes.json()) as TenantRow[];
-        setTenants(tenantsData);
-        setEditingTenant((current) =>
-          current ? tenantsData.find((row) => row.id === current.id) ?? current : current,
-        );
-      } else {
-        await loadTenants();
-      }
-      setAssignments((current) => {
-        const index = current.findIndex((row) => row.id === saved.id);
-        if (index === -1) return [saved, ...current];
-        return current.map((row) => (row.id === saved.id ? saved : row));
+        method: isUpdate ? "PATCH" : "POST",
+        body: isUpdate
+          ? buildAssignmentUpdatePayload(assignmentForm)
+          : buildAssignmentCreatePayload(editingTenant.id, assignmentForm),
       });
-      void loadAssignments(editingTenant.id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
+      closeAssignmentEditor();
+      const updatedTenants = await invalidateTenants();
+      await invalidateAssignments();
+      const refreshed = updatedTenants?.find((row) => row.id === editingTenant.id);
+      if (refreshed) setEditingTenant(refreshed);
+    } catch {
+      // Error message is set by the cache hook.
     }
   }
 
@@ -313,6 +331,20 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
     assignments.find((row) => row.isActive) ??
     editingTenant?.assignments?.[0] ??
     null;
+
+  const { totalActiveRent, activeRentTenantCount } = useMemo(() => {
+    let total = 0;
+    let count = 0;
+
+    for (const tenant of tenants) {
+      const monthlyRent = tenant.assignments?.[0]?.monthlyRent;
+      if (monthlyRent == null || monthlyRent === "") continue;
+      total += toNumber(monthlyRent);
+      count += 1;
+    }
+
+    return { totalActiveRent: total, activeRentTenantCount: count };
+  }, [tenants]);
 
   return (
     <div>
@@ -328,11 +360,23 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
         </p>
       ) : null}
 
+      <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900 px-5 py-4">
+        <p className="text-sm text-slate-400">Total active rent</p>
+        <p className="mt-1 text-2xl font-semibold text-emerald-100">
+          {formatMoney(totalActiveRent)}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          {activeRentTenantCount} tenant{activeRentTenantCount === 1 ? "" : "s"} with an active
+          assignment and monthly rent
+        </p>
+      </div>
+
       {(grants.canCreate || grants.canUpdate) && (
         <form
           onSubmit={handleTenantSubmit}
           className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-6"
         >
+          <fieldset disabled={submitting} className="min-w-0 border-0 p-0">
           <h2 className="text-lg font-medium">
             {editingTenant ? "Edit" : "Add"} tenant
           </h2>
@@ -396,6 +440,20 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
               </select>
             </div>
             <div>
+              <label className="mb-1 block text-sm text-slate-300">Security deposit</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0"
+                value={tenantForm.securityDeposit}
+                onChange={(e) =>
+                  setTenantForm({ ...tenantForm, securityDeposit: e.target.value })
+                }
+                className={inputClass}
+              />
+            </div>
+            <div>
               <label className="mb-1 block text-sm text-slate-300">Picture URL</label>
               <input
                 type="url"
@@ -415,22 +473,25 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
             </div>
           </div>
           <div className="mt-4 flex gap-3">
-            <button type="submit" className={buttonPrimaryClass}>
-              {editingTenant ? "Update" : "Create"}
+            <button type="submit" className={buttonPrimaryClass} disabled={submitting}>
+              {saveButtonLabel({ submitting, isEdit: !!editingTenant })}
             </button>
             {editingTenant ? (
               <button
                 type="button"
                 className={buttonSecondaryClass}
+                disabled={submitting}
                 onClick={() => {
                   setEditingTenant(null);
                   setTenantForm(emptyTenantForm);
+                  closeAssignmentEditor();
                 }}
               >
                 Cancel
               </button>
             ) : null}
           </div>
+          </fieldset>
         </form>
       )}
 
@@ -451,10 +512,13 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
                 onClick={() => {
                   setEditingAssignment(null);
                   setShowAssignmentForm(true);
-                  setAssignmentForm({
-                    ...emptyAssignmentForm,
-                    unitId: tenantForm.unitId || activeAssignment?.unit.id || "",
-                  });
+                  setAssignmentForm(
+                    buildNewAssignmentForm({
+                      unitId: tenantForm.unitId || activeAssignment?.unit.id || "",
+                      isSubsequent: assignments.length > 0,
+                      tenantRents,
+                    }),
+                  );
                 }}
               >
                 New assignment
@@ -464,6 +528,7 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
 
           {showAssignmentForm ? (
             <form onSubmit={handleAssignmentSubmit} className="mt-4 grid gap-4 md:grid-cols-2">
+              <fieldset disabled={assignmentListSubmitting} className="contents min-w-0 border-0 p-0">
               <h3 className="md:col-span-2 text-sm font-medium text-slate-300">
                 {editingAssignment ? "Edit assignment" : "New assignment"}
               </h3>
@@ -521,7 +586,11 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
                     : undefined
                 }
                 onChange={(leaseFrom) =>
-                  setAssignmentForm((prev) => ({ ...prev, leaseFrom }))
+                  setAssignmentForm((prev) => ({
+                    ...prev,
+                    leaseFrom,
+                    leaseTo: leaseFrom ? calcLeaseToFromLeaseFrom(leaseFrom) : "",
+                  }))
                 }
               />
               <DatePickerField
@@ -592,17 +661,28 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
                 </div>
               ) : null}
               <div className="md:col-span-2 flex gap-3">
-                <button type="submit" className={buttonPrimaryClass}>
-                  {editingAssignment ? "Update assignment" : "Save assignment"}
+                <button
+                  type="submit"
+                  className={buttonPrimaryClass}
+                  disabled={assignmentListSubmitting}
+                >
+                  {saveButtonLabel({
+                    submitting: assignmentListSubmitting,
+                    isEdit: !!editingAssignment,
+                    createLabel: "Save assignment",
+                    updateLabel: "Update assignment",
+                  })}
                 </button>
                 <button
                   type="button"
                   className={buttonSecondaryClass}
                   onClick={closeAssignmentEditor}
+                  disabled={assignmentListSubmitting}
                 >
                   Cancel
                 </button>
               </div>
+              </fieldset>
             </form>
           ) : null}
 
@@ -646,23 +726,19 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
                           }}
                           onDelete={async () => {
                             if (!confirm("Delete this assignment?")) return;
-                            const res = await fetch(`/api/tenant-assignments/${row.id}`, {
-                              method: "DELETE",
-                            });
-                            if (!res.ok) {
-                              setError((await res.json()).error);
-                              return;
-                            }
-                            if (editingAssignment?.id === row.id) {
-                              closeAssignmentEditor();
-                            }
-                            if (editingTenant) {
-                              await Promise.all([
-                                loadTenants(),
-                                loadAssignments(editingTenant.id),
-                              ]);
+                            try {
+                              await removeAssignment(`/api/tenant-assignments/${row.id}`, row.id);
+                              if (editingAssignment?.id === row.id) {
+                                closeAssignmentEditor();
+                              }
+                              await invalidateTenants();
+                              await invalidateAssignments();
+                            } catch {
+                              // Error message is set by the cache hook.
                             }
                           }}
+                          deleting={deletingAssignmentId === row.id}
+                          disabled={assignmentListSubmitting}
                         />
                       </td>
                     </tr>
@@ -671,6 +747,27 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
               </tbody>
             </table>
           </div>
+
+          {activeAssignment ? (
+            <TenantExitPanel
+              tenantId={editingTenant.id}
+              tenantName={tenantName(editingTenant)}
+              assignment={activeAssignment}
+              tenantRents={tenantRents}
+              canCreate={grants.canCreate}
+              onCompleted={async () => {
+                const updatedTenants = await invalidateTenants();
+                await invalidateAssignments();
+                const updated = updatedTenants?.find((row) => row.id === editingTenant.id);
+                if (updated) setEditingTenant(updated);
+              }}
+            />
+          ) : null}
+
+          <TenantPaymentAccountsPanel
+            tenantId={editingTenant.id}
+            canUpdate={grants.canUpdate}
+          />
         </div>
       ) : null}
 
@@ -689,7 +786,7 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
             </tr>
           </thead>
           <tbody>
-            {loading ? (
+            {loading && tenants.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-8 text-slate-400">
                   Loading...
@@ -731,6 +828,7 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
                         canUpdate={grants.canUpdate}
                         canDelete={grants.canDelete}
                         onEdit={() => {
+                          closeAssignmentEditor();
                           setEditingTenant(row);
                           setTenantForm({
                             firstName: row.firstName,
@@ -740,23 +838,26 @@ export function TenantsAdmin({ grants }: { grants: ResourceGrants }) {
                             idDocument: row.idDocument ?? "",
                             unitId: row.unit?.id ?? "",
                             pictureUrl: row.pictureUrl ?? "",
+                            securityDeposit: row.securityDeposit
+                              ? String(row.securityDeposit)
+                              : "",
                           });
                         }}
                         onDelete={async () => {
                           if (!confirm("Delete this tenant?")) return;
-                          const res = await fetch(`/api/tenants/${row.id}`, {
-                            method: "DELETE",
-                          });
-                          if (!res.ok) {
-                            setError((await res.json()).error);
-                            return;
+                          try {
+                            await removeTenant(`/api/tenants/${row.id}`, row.id);
+                            if (editingTenant?.id === row.id) {
+                              setEditingTenant(null);
+                              setTenantForm(emptyTenantForm);
+                              closeAssignmentEditor();
+                            }
+                          } catch {
+                            // Error message is set by the cache hook.
                           }
-                          if (editingTenant?.id === row.id) {
-                            setEditingTenant(null);
-                            setTenantForm(emptyTenantForm);
-                          }
-                          await loadTenants();
                         }}
+                        deleting={deletingId === row.id}
+                        disabled={submitting}
                       />
                     </td>
                   </tr>

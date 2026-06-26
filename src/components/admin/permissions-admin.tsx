@@ -1,14 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { SearchableSelect } from "@/components/admin/searchable-select";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
   inputClass,
+  saveButtonLabel,
 } from "@/components/admin/ui";
 import { RowActions } from "@/components/admin/row-actions";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { useCachedList } from "@/hooks/use-cached-list";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 type CatalogOption = {
@@ -38,11 +41,6 @@ export function PermissionsAdmin({
   canViewResources: boolean;
   canViewActions: boolean;
 }) {
-  const [permissions, setPermissions] = useState<PermissionRow[]>([]);
-  const [resources, setResources] = useState<CatalogOption[]>([]);
-  const [actions, setActions] = useState<CatalogOption[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<PermissionRow | null>(null);
   const [form, setForm] = useState({
     resourceId: "",
@@ -52,37 +50,24 @@ export function PermissionsAdmin({
 
   const needsCatalogs = grants.canCreate || grants.canUpdate;
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const permissionsRes = await fetch("/api/admin/permissions");
-      if (!permissionsRes.ok) throw new Error((await permissionsRes.json()).error);
-      setPermissions(await permissionsRes.json());
-
-      if (needsCatalogs) {
-        const [resourcesRes, actionsRes] = await Promise.all([
-          fetch("/api/admin/resources?active=true"),
-          fetch("/api/admin/actions?active=true"),
-        ]);
-        if (!resourcesRes.ok) throw new Error((await resourcesRes.json()).error);
-        if (!actionsRes.ok) throw new Error((await actionsRes.json()).error);
-        setResources(await resourcesRes.json());
-        setActions(await actionsRes.json());
-      } else {
-        setResources([]);
-        setActions([]);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load permissions");
-    } finally {
-      setLoading(false);
-    }
-  }, [needsCatalogs]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const {
+    items: permissions,
+    loading,
+    error,
+    submitting,
+    deletingId,
+    setError,
+    save,
+    remove,
+  } = useCachedList<PermissionRow>("/api/admin/permissions");
+  const { data: resources = [] } = useCachedFetch<CatalogOption[]>(
+    "/api/admin/resources?active=true",
+    { enabled: needsCatalogs },
+  );
+  const { data: actions = [] } = useCachedFetch<CatalogOption[]>(
+    "/api/admin/actions?active=true",
+    { enabled: needsCatalogs },
+  );
 
   function resetForm() {
     setEditing(null);
@@ -101,6 +86,7 @@ export function PermissionsAdmin({
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
     setError(null);
 
     if (!form.resourceId || !form.actionId) {
@@ -114,36 +100,26 @@ export function PermissionsAdmin({
       description: form.description || undefined,
     };
 
-    const response = await fetch(
-      editing ? `/api/admin/permissions/${editing.id}` : "/api/admin/permissions",
-      {
+    try {
+      await save({
+        url: editing ? `/api/admin/permissions/${editing.id}` : "/api/admin/permissions",
         method: editing ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      },
-    );
-
-    if (!response.ok) {
-      const data = await response.json();
-      setError(data.error ?? "Save failed");
-      return;
+        body: payload,
+      });
+      resetForm();
+    } catch {
+      // Error message is set by the cache hook.
     }
-
-    resetForm();
-    await load();
   }
 
   async function handleDelete(id: string) {
     if (!confirm("Delete this permission?")) return;
-    const response = await fetch(`/api/admin/permissions/${id}`, {
-      method: "DELETE",
-    });
-    if (!response.ok) {
-      const data = await response.json();
-      setError(data.error ?? "Delete failed");
-      return;
+    setError(null);
+    try {
+      await remove(`/api/admin/permissions/${id}`, id);
+    } catch {
+      // Error message is set by the cache hook.
     }
-    await load();
   }
 
   const resourceOptions = resources.map((r) => ({
@@ -161,7 +137,7 @@ export function PermissionsAdmin({
   const showForm = grants.canCreate || (editing !== null && grants.canUpdate);
   const canSubmit = editing ? grants.canUpdate : grants.canCreate;
 
-  if (loading) {
+  if (loading && permissions.length === 0) {
     return <p className="text-slate-400">Loading permissions...</p>;
   }
 
@@ -250,12 +226,17 @@ export function PermissionsAdmin({
 
         <div className="flex gap-3">
           {canSubmit ? (
-            <button type="submit" className={buttonPrimaryClass}>
-              {editing ? "Update" : "Create"}
+            <button type="submit" className={buttonPrimaryClass} disabled={submitting}>
+              {saveButtonLabel({ submitting, isEdit: !!editing })}
             </button>
           ) : null}
           {editing ? (
-            <button type="button" className={buttonSecondaryClass} onClick={resetForm}>
+            <button
+              type="button"
+              className={buttonSecondaryClass}
+              onClick={resetForm}
+              disabled={submitting}
+            >
               Cancel
             </button>
           ) : null}
@@ -293,7 +274,9 @@ export function PermissionsAdmin({
                     canUpdate={grants.canUpdate}
                     canDelete={grants.canDelete}
                     onEdit={() => startEdit(permission)}
-                    onDelete={() => handleDelete(permission.id)}
+                    onDelete={() => void handleDelete(permission.id)}
+                    deleting={deletingId === permission.id}
+                    disabled={submitting}
                   />
                 </td>
                 ) : null}

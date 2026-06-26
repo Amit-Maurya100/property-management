@@ -9,3 +9,14 @@ export const buttonSecondaryClass =
 
 export const buttonDangerClass =
   "rounded-lg border border-red-500/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-60";
+
+export function saveButtonLabel(options: {
+  submitting: boolean;
+  isEdit: boolean;
+  createLabel?: string;
+  updateLabel?: string;
+}): string {
+  const { submitting, isEdit, createLabel = "Create", updateLabel = "Update" } = options;
+  if (submitting) return isEdit ? "Updating..." : "Adding...";
+  return isEdit ? updateLabel : createLabel;
+}

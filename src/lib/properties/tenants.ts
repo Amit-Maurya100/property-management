@@ -7,10 +7,13 @@ import {
   assertUserOwnsUnit,
   ownerTenantFilter,
 } from "@/lib/properties/ownership";
+import { provisionTenantLoginAccount } from "@/lib/tenant-portal/provision-login";
+import { sendTenantCredentialsNotifications } from "@/lib/tenant-portal/credentials-notify";
 import { assignmentSelect } from "@/lib/properties/tenant-assignments";
 
 const tenantSelect = {
   id: true,
+  userId: true,
   unitId: true,
   firstName: true,
   lastName: true,
@@ -18,6 +21,7 @@ const tenantSelect = {
   phone: true,
   idDocument: true,
   pictureUrl: true,
+  securityDeposit: true,
   createdAt: true,
   updatedAt: true,
   unit: {
@@ -53,14 +57,16 @@ type TenantInput = {
   idDocument?: string;
   unitId?: bigint;
   pictureUrl?: string;
+  securityDeposit?: number;
 };
 
-type TenantUpdateInput = Partial<Omit<TenantInput, "unitId">> & {
+type TenantUpdateInput = Partial<Omit<TenantInput, "unitId" | "securityDeposit">> & {
   email?: string | null;
   phone?: string | null;
   idDocument?: string | null;
   unitId?: bigint | null;
   pictureUrl?: string | null;
+  securityDeposit?: number | null;
 };
 
 function tenantCreateData(ctx: PropertyAccessContext, data: TenantInput) {
@@ -73,10 +79,11 @@ function tenantCreateData(ctx: PropertyAccessContext, data: TenantInput) {
     phone: data.phone || null,
     idDocument: data.idDocument || null,
     pictureUrl: data.pictureUrl || null,
+    securityDeposit: data.securityDeposit ?? 0,
   };
 }
 
-function tenantUpdateData(data: TenantUpdateInput) {
+function tenantUpdateData(data: TenantUpdateInput): Prisma.TenantUncheckedUpdateInput {
   return {
     firstName: data.firstName,
     lastName: data.lastName,
@@ -85,6 +92,8 @@ function tenantUpdateData(data: TenantUpdateInput) {
     idDocument: data.idDocument,
     unitId: data.unitId,
     pictureUrl: data.pictureUrl,
+    securityDeposit:
+      data.securityDeposit === null ? 0 : data.securityDeposit,
   };
 }
 
@@ -117,8 +126,38 @@ export async function getTenant(ctx: PropertyAccessContext, id: IdInput) {
 
 export async function createTenant(ctx: PropertyAccessContext, data: TenantInput) {
   await assertTenantUnitOwnership(ctx, data.unitId);
-  return prisma.tenant.create({
+
+  const tenant = await prisma.tenant.create({
     data: tenantCreateData(ctx, data),
+    select: tenantSelect,
+  });
+
+  const email = data.email?.trim();
+  if (email) {
+    try {
+      const account = await provisionTenantLoginAccount({
+        tenantId: tenant.id,
+        email,
+        grantedById: ctx.userId,
+      });
+
+      void sendTenantCredentialsNotifications({
+        tenantName: `${tenant.firstName} ${tenant.lastName}`.trim(),
+        email: account.email,
+        phone: data.phone,
+        loginId: account.email,
+        password: account.defaultPassword,
+      }).catch((error) => {
+        console.error("Failed to send tenant credentials notification", error);
+      });
+    } catch (error) {
+      await prisma.tenant.delete({ where: { id: tenant.id } }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  return prisma.tenant.findUniqueOrThrow({
+    where: { id: tenant.id },
     select: tenantSelect,
   });
 }

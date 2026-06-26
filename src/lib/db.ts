@@ -15,8 +15,13 @@ function getPrismaSchemaFingerprint() {
     Prisma.PaymentScalarFieldEnum,
     Prisma.OrganizationScalarFieldEnum,
     Prisma.GstInvoiceScalarFieldEnum,
+    Prisma.GstPaymentScalarFieldEnum,
     Prisma.GstTaxConfigurationScalarFieldEnum,
     Prisma.GstMasterScalarFieldEnum,
+    Prisma.GstMasterBankAccountScalarFieldEnum,
+    Prisma.RentPaymentAccountScalarFieldEnum,
+    Prisma.TenantRentPaymentAccountScalarFieldEnum,
+    Prisma.NotificationSettingsScalarFieldEnum,
     Prisma.BuildingUtilityRateScalarFieldEnum,
   ] as const;
 
@@ -29,17 +34,14 @@ const PRISMA_SCHEMA_FINGERPRINT = getPrismaSchemaFingerprint();
 
 type TaggedPrismaClient = PrismaClient & { __schemaFingerprint?: string };
 
-function createPrismaClient() {
-  const pool =
-    globalForPrisma.pool ??
-    new Pool({
-      connectionString: process.env.DATABASE_URL,
-    });
+function createPool() {
+  return new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: 10,
+  });
+}
 
-  if (process.env.NODE_ENV !== "production") {
-    globalForPrisma.pool = pool;
-  }
-
+function createPrismaClient(pool: Pool) {
   const adapter = new PrismaPg(pool);
   const client = new PrismaClient({ adapter }) as TaggedPrismaClient;
   client.__schemaFingerprint = PRISMA_SCHEMA_FINGERPRINT;
@@ -61,26 +63,27 @@ function isPrismaClientStale(client: PrismaClient) {
     !("payment" in client) ||
     !("organization" in client) ||
     !("gstInvoice" in client) ||
+    !("gstPayment" in client) ||
     !("gstTaxConfiguration" in client) ||
     !("gstMaster" in client) ||
-    !("buildingUtilityRate" in client)
+    !("gstMasterBankAccount" in client) ||
+    !("buildingUtilityRate" in client) ||
+    !("notificationSettings" in client)
   );
 }
 
 function getPrismaClient() {
+  if (!globalForPrisma.pool) {
+    globalForPrisma.pool = createPool();
+  }
+
   const existing = globalForPrisma.prisma;
   if (existing && !isPrismaClientStale(existing)) {
     return existing;
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    globalForPrisma.prisma = undefined;
-  }
-
-  const client = createPrismaClient();
-  if (process.env.NODE_ENV !== "production") {
-    globalForPrisma.prisma = client;
-  }
+  const client = createPrismaClient(globalForPrisma.pool);
+  globalForPrisma.prisma = client;
   return client;
 }
 

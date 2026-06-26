@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { buttonPrimaryClass, buttonSecondaryClass, inputClass } from "@/components/admin/ui";
-import { readApiError, readApiJson } from "@/lib/api/parse-response";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
+import { readApiError } from "@/lib/api/parse-response";
 import { getFinancialQuarter, getFinancialYearStart } from "@/lib/gst/report-periods";
 import { formatMoney } from "@/lib/properties/payment-calculations";
 import type { GstReportBreakdown, GstReportResult } from "@/lib/gst/reports";
@@ -191,8 +192,6 @@ export function GstReportAdmin() {
   const [quarter, setQuarter] = useState(String(getFinancialQuarter(now)));
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [report, setReport] = useState<GstReportResult | null>(null);
-  const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -213,28 +212,15 @@ export function GstReportAdmin() {
     return params.toString();
   }, [mode, month, year, quarter, dateFrom, dateTo]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/gst/reports?${queryString}`);
-      if (!res.ok) throw new Error(await readApiError(res));
-      setReport(await readApiJson<GstReportResult>(res));
-    } catch (err) {
-      setReport(null);
-      setError(err instanceof Error ? err.message : "Failed to load report");
-    } finally {
-      setLoading(false);
-    }
-  }, [queryString]);
+  const reportEnabled = mode !== "custom" || Boolean(dateFrom && dateTo);
+  const reportUrl = `/api/gst/reports?${queryString}`;
 
-  useEffect(() => {
-    if (mode === "custom" && (!dateFrom || !dateTo)) {
-      setLoading(false);
-      return;
-    }
-    void load();
-  }, [load, mode, dateFrom, dateTo]);
+  const {
+    data: report,
+    loading,
+    error: fetchError,
+    reload,
+  } = useCachedFetch<GstReportResult>(reportUrl, { enabled: reportEnabled });
 
   async function downloadExcel() {
     if (mode === "custom" && (!dateFrom || !dateTo)) {
@@ -401,8 +387,13 @@ export function GstReportAdmin() {
         </div>
 
         {mode === "custom" ? (
-          <button type="button" className={`${buttonPrimaryClass} mt-4`} onClick={() => void load()}>
-            Apply dates
+          <button
+            type="button"
+            className={`${buttonPrimaryClass} mt-4`}
+            disabled={loading || !dateFrom || !dateTo}
+            onClick={() => void reload(true)}
+          >
+            {loading ? "Loading..." : "Apply dates"}
           </button>
         ) : null}
 
@@ -416,9 +407,9 @@ export function GstReportAdmin() {
         </button>
       </div>
 
-      {error ? (
+      {(error || fetchError) ? (
         <p className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-          {error}
+          {error ?? fetchError}
         </p>
       ) : null}
 

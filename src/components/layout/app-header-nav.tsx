@@ -7,6 +7,7 @@ import {
   type AppNavContext,
 } from "@/lib/navigation/nav-client";
 import { getSectionForPath } from "@/lib/navigation/sections";
+import { contentWidthClass } from "@/lib/layout/content-width";
 
 export function AppHeaderNav({
   navContext,
@@ -22,7 +23,7 @@ export function AppHeaderNav({
   }
 
   return (
-    <nav className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-6 pb-3">
+    <nav className={`mx-auto flex ${contentWidthClass} gap-1 overflow-x-auto px-4 pb-3 sm:px-6`}>
       {navItems.map((item) => {
         const isActive =
           pathname === item.href ||

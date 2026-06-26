@@ -3,6 +3,7 @@ import { signOut } from "@/lib/auth";
 import { CompanyLogo } from "@/components/layout/company-logo";
 import { AppHeaderNav } from "@/components/layout/app-header-nav";
 import { COMPANY_NAME } from "@/components/auth/ui";
+import { contentWidthClass } from "@/lib/layout/content-width";
 import type { AppNavContext } from "@/lib/navigation/nav-client";
 
 type AppHeaderProps = {
@@ -20,7 +21,7 @@ export function AppHeader({
 }: AppHeaderProps) {
   return (
     <header className="border-b border-slate-800 bg-slate-900/80">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-4">
+      <div className={`mx-auto flex ${contentWidthClass} items-center justify-between gap-4 px-4 py-4 sm:px-6`}>
         <Link href={homeHref} className="flex items-center gap-3">
           <CompanyLogo />
           <div>

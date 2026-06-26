@@ -1,5 +1,11 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
+import {
+  SERVER_CACHE_TTL,
+  cachedQuery,
+  invalidatePropertyCache,
+  propertyCacheKey,
+} from "@/lib/api/server-cache";
 import { parseId, type IdInput } from "@/lib/ids";
 import type { PropertyAccessContext } from "@/lib/properties/ownership";
 import { assertUserOwnsProperty, ownerPropertyFilter } from "@/lib/properties/ownership";
@@ -33,11 +39,16 @@ const propertySelect = {
 } as const;
 
 export async function listProperties(ctx: PropertyAccessContext) {
-  return prisma.property.findMany({
-    where: ownerPropertyFilter(ctx),
-    select: propertySelect,
-    orderBy: { createdAt: "desc" },
-  });
+  return cachedQuery(
+    propertyCacheKey(ctx.userId, "properties"),
+    SERVER_CACHE_TTL.reference,
+    () =>
+      prisma.property.findMany({
+        where: ownerPropertyFilter(ctx),
+        select: propertySelect,
+        orderBy: { createdAt: "desc" },
+      }),
+  );
 }
 
 export async function getProperty(ctx: PropertyAccessContext, id: IdInput) {
@@ -70,7 +81,7 @@ export async function createProperty(
     amenityIds?: bigint[];
   },
 ) {
-  return prisma.$transaction(async (tx) => {
+  const property = await prisma.$transaction(async (tx) => {
     const address = await tx.address.create({
       data: {
         line1: data.address.line1,
@@ -109,6 +120,8 @@ export async function createProperty(
       select: propertySelect,
     });
   });
+  invalidatePropertyCache(ctx.userId);
+  return property;
 }
 
 export async function updateProperty(
@@ -134,7 +147,7 @@ export async function updateProperty(
   const propertyId = parseId(id);
   const existing = await getProperty(ctx, propertyId);
 
-  return prisma.$transaction(async (tx) => {
+  const property = await prisma.$transaction(async (tx) => {
     if (data.address && Object.keys(data.address).length > 0) {
       const addressData: Prisma.AddressUpdateInput = {};
       if (data.address.line1) addressData.line1 = data.address.line1;
@@ -175,6 +188,8 @@ export async function updateProperty(
       select: propertySelect,
     });
   });
+  invalidatePropertyCache(ctx.userId);
+  return property;
 }
 
 export async function deleteProperty(ctx: PropertyAccessContext, id: IdInput) {
@@ -184,4 +199,5 @@ export async function deleteProperty(ctx: PropertyAccessContext, id: IdInput) {
     await tx.property.delete({ where: { id: propertyId } });
     await tx.address.delete({ where: { id: existing.address.id } });
   });
+  invalidatePropertyCache(ctx.userId);
 }

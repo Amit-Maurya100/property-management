@@ -1,0 +1,493 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { Client } from "whatsapp-web.js";
+import {
+  isWhatsAppEnabled,
+  isWhatsAppEnabledSync,
+} from "@/lib/notifications/settings";
+import {
+  isWhatsAppRuntimeAvailable,
+  isVercelDeployment,
+  requirePuppeteerExecutablePath,
+  resolvePuppeteerExecutablePath,
+} from "@/lib/whatsapp/whatsapp-config";
+import {
+  getWhatsAppConnectionState,
+  resetWhatsAppConnectionState,
+  setWhatsAppConnectionState,
+} from "@/lib/whatsapp/whatsapp-connection-state";
+
+const SESSION_DIR = path.join(process.cwd(), ".wwebjs_auth", "session");
+const AUTH_DIR = path.join(process.cwd(), ".wwebjs_auth");
+const WARMUP_READY_TIMEOUT_MS = 300_000;
+const SEND_READY_TIMEOUT_MS = 20_000;
+
+type QueuedWhatsAppMessage = {
+  whatsappNumber: string;
+  mediaBase64: string;
+  mediaFilename: string;
+  caption: string;
+};
+
+const globalForWhatsApp = globalThis as unknown as {
+  whatsappClient?: Client;
+  whatsappClientPromise?: Promise<Client>;
+  messageQueue?: QueuedWhatsAppMessage[];
+  isProcessingQueue?: boolean;
+};
+
+type WhatsAppClientWithInfo = Client & {
+  info?: { wid?: { user?: string; _serialized?: string } };
+};
+
+function getMessageQueue() {
+  if (!globalForWhatsApp.messageQueue) {
+    globalForWhatsApp.messageQueue = [];
+  }
+  return globalForWhatsApp.messageQueue;
+}
+
+function clearWhatsAppClientState() {
+  globalForWhatsApp.whatsappClient = undefined;
+  globalForWhatsApp.whatsappClientPromise = undefined;
+}
+
+function getLinkedPhone(client: Client) {
+  const withInfo = client as WhatsAppClientWithInfo;
+  return withInfo.info?.wid?.user ?? null;
+}
+
+function isClientUsable(client: Client) {
+  const withInfo = client as WhatsAppClientWithInfo;
+  return Boolean(withInfo.info?.wid?._serialized);
+}
+
+function isBrowserAlreadyRunningError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("browser is already running");
+}
+
+function isConnectionTimeoutError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("WhatsApp connection timeout");
+}
+
+async function clearStaleBrowserSessionLocks() {
+  for (const file of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    try {
+      await fs.unlink(path.join(SESSION_DIR, file));
+    } catch {
+      // Ignore missing lock files.
+    }
+  }
+}
+
+async function removeWhatsAppAuthData() {
+  await fs.rm(AUTH_DIR, { recursive: true, force: true });
+}
+
+function syncReadyState(client: Client) {
+  setWhatsAppConnectionState({
+    status: "ready",
+    qr: null,
+    linkedPhone: getLinkedPhone(client),
+    error: null,
+  });
+}
+
+function waitForWhatsAppReady(client: Client, timeoutMs: number) {
+  return new Promise<void>((resolve, reject) => {
+    if (isClientUsable(client)) {
+      syncReadyState(client);
+      resolve();
+      return;
+    }
+
+    const interval = setInterval(() => {
+      if (isClientUsable(client)) {
+        syncReadyState(client);
+        finish();
+      }
+    }, 1_000);
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(
+          "WhatsApp connection timeout. Open Rent → WhatsApp in the app and scan the QR code.",
+        ),
+      );
+    }, timeoutMs);
+
+    const finish = () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+      cleanup();
+      resolve();
+    };
+
+    const onReady = () => finish();
+
+    const onAuthFailure = (message: string) => {
+      clearTimeout(timer);
+      clearInterval(interval);
+      cleanup();
+      setWhatsAppConnectionState({
+        status: "error",
+        qr: null,
+        error: `Authentication failed: ${message}`,
+      });
+      reject(new Error(`WhatsApp auth failure: ${message}`));
+    };
+
+    const cleanup = () => {
+      client.off("ready", onReady);
+      client.off("auth_failure", onAuthFailure);
+    };
+
+    client.on("ready", onReady);
+    client.on("auth_failure", onAuthFailure);
+  });
+}
+
+async function waitForClientUsable(client: Client, timeoutMs: number) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (isClientUsable(client)) {
+      syncReadyState(client);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  throw new Error("WhatsApp client is not ready to send messages yet");
+}
+
+async function initializeWhatsAppClient(client: Client) {
+  const readyPromise = waitForWhatsAppReady(client, WARMUP_READY_TIMEOUT_MS);
+
+  try {
+    await client.initialize();
+  } catch (error) {
+    if (isBrowserAlreadyRunningError(error)) {
+      if (globalForWhatsApp.whatsappClient && isClientUsable(globalForWhatsApp.whatsappClient)) {
+        return globalForWhatsApp.whatsappClient;
+      }
+
+      console.warn("Stale WhatsApp browser session detected; clearing lock files and retrying");
+      await clearStaleBrowserSessionLocks();
+      await client.initialize();
+    } else {
+      throw error;
+    }
+  }
+
+  await readyPromise;
+  await waitForClientUsable(client, 30_000);
+  return client;
+}
+
+async function sendQueuedMessage(client: Client, message: QueuedWhatsAppMessage) {
+  const { MessageMedia } = await import("whatsapp-web.js");
+  const media = new MessageMedia(
+    "image/png",
+    message.mediaBase64,
+    message.mediaFilename,
+  );
+
+  const numberId = await client.getNumberId(message.whatsappNumber);
+  if (!numberId) {
+    console.warn(`Phone ${message.whatsappNumber} is not registered on WhatsApp; skipping queued message`);
+    return;
+  }
+
+  await client.sendMessage(numberId._serialized, media, { caption: message.caption });
+  console.log(`Sent queued WhatsApp message to ${message.whatsappNumber}`);
+}
+
+export async function flushWhatsAppMessageQueue() {
+  if (globalForWhatsApp.isProcessingQueue) return;
+
+  const client = globalForWhatsApp.whatsappClient;
+  if (!client || !isClientUsable(client)) return;
+
+  const queue = getMessageQueue();
+  if (queue.length === 0) return;
+
+  globalForWhatsApp.isProcessingQueue = true;
+  try {
+    while (queue.length > 0) {
+      const message = queue[0];
+      try {
+        await sendQueuedMessage(client, message);
+        queue.shift();
+      } catch (error) {
+        console.error("Failed to send queued WhatsApp message", error);
+        break;
+      }
+    }
+  } finally {
+    globalForWhatsApp.isProcessingQueue = false;
+  }
+}
+
+function enqueueWhatsAppMessage(message: QueuedWhatsAppMessage) {
+  getMessageQueue().push(message);
+  console.log(`Queued WhatsApp message for ${message.whatsappNumber}`);
+}
+
+async function createWhatsAppClient() {
+  const { Client, LocalAuth } = await import("whatsapp-web.js");
+  const qrcode = await import("qrcode-terminal");
+
+  setWhatsAppConnectionState({ status: "initializing", qr: null, error: null });
+
+  const executablePath = requirePuppeteerExecutablePath();
+  const client = new Client({
+    authStrategy: new LocalAuth({
+      dataPath: AUTH_DIR,
+    }),
+    puppeteer: {
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath,
+    },
+  });
+
+  client.on("qr", (qr) => {
+    console.log("\nWhatsApp: scan this QR code with your phone (or open Rent → WhatsApp)\n");
+    qrcode.generate(qr, { small: true });
+    setWhatsAppConnectionState({
+      status: "qr",
+      qr,
+      linkedPhone: null,
+      error: null,
+    });
+  });
+
+  client.on("authenticated", () => {
+    console.log("WhatsApp authenticated");
+    setWhatsAppConnectionState({
+      status: "authenticated",
+      qr: null,
+      error: null,
+    });
+  });
+
+  client.on("ready", () => {
+    console.log("WhatsApp client ready");
+    syncReadyState(client);
+    void flushWhatsAppMessageQueue();
+  });
+
+  client.on("disconnected", (reason) => {
+    console.warn("WhatsApp disconnected:", reason);
+    clearWhatsAppClientState();
+    setWhatsAppConnectionState({
+      status: "disconnected",
+      qr: null,
+      linkedPhone: null,
+      error: String(reason),
+    });
+  });
+
+  try {
+    const initialized = await initializeWhatsAppClient(client);
+    globalForWhatsApp.whatsappClient = initialized;
+    syncReadyState(initialized);
+    return initialized;
+  } catch (error) {
+    await client.destroy().catch(() => undefined);
+    clearWhatsAppClientState();
+    if (!isConnectionTimeoutError(error)) {
+      setWhatsAppConnectionState({
+        status: "error",
+        qr: null,
+        error: error instanceof Error ? error.message : "WhatsApp initialization failed",
+      });
+    } else {
+      setWhatsAppConnectionState({
+        status: "qr",
+        error: error instanceof Error ? error.message : null,
+      });
+    }
+    throw error;
+  }
+}
+
+async function destroyWhatsAppClient() {
+  const client = globalForWhatsApp.whatsappClient;
+  clearWhatsAppClientState();
+  if (client) {
+    await client.destroy().catch(() => undefined);
+  }
+}
+
+export async function shutdownWhatsAppClient() {
+  await destroyWhatsAppClient();
+  await clearStaleBrowserSessionLocks();
+  resetWhatsAppConnectionState("idle");
+}
+
+export async function reconnectWhatsAppClient() {
+  if (!isWhatsAppRuntimeAvailable()) {
+    throw new Error("WHATSAPP_UNAVAILABLE");
+  }
+
+  await destroyWhatsAppClient();
+  await clearStaleBrowserSessionLocks();
+  resetWhatsAppConnectionState("initializing");
+  warmUpWhatsAppClient();
+}
+
+export async function logoutWhatsAppClient() {
+  if (!isWhatsAppRuntimeAvailable()) {
+    throw new Error("WHATSAPP_UNAVAILABLE");
+  }
+
+  await destroyWhatsAppClient();
+  await clearStaleBrowserSessionLocks();
+  await removeWhatsAppAuthData();
+  resetWhatsAppConnectionState("initializing");
+  warmUpWhatsAppClient();
+}
+
+export function warmUpWhatsAppClient() {
+  if (!isWhatsAppEnabledSync()) {
+    resetWhatsAppConnectionState("disabled");
+    return;
+  }
+
+  if (isVercelDeployment()) {
+    setWhatsAppConnectionState({
+      status: "unavailable",
+      qr: null,
+      error:
+        "WhatsApp cannot run on Vercel serverless. Disable it under Notifications, or host on a Node server with Chrome.",
+    });
+    return;
+  }
+
+  if (!resolvePuppeteerExecutablePath()) {
+    setWhatsAppConnectionState({
+      status: "unavailable",
+      qr: null,
+      error: "Chrome/Chromium not found. Set PUPPETEER_EXECUTABLE_PATH on the server.",
+    });
+    return;
+  }
+
+  if (globalForWhatsApp.whatsappClient && isClientUsable(globalForWhatsApp.whatsappClient)) {
+    syncReadyState(globalForWhatsApp.whatsappClient);
+    void flushWhatsAppMessageQueue();
+    return;
+  }
+
+  if (globalForWhatsApp.whatsappClientPromise) return;
+
+  globalForWhatsApp.whatsappClientPromise = createWhatsAppClient()
+    .then((client) => {
+      void flushWhatsAppMessageQueue();
+      return client;
+    })
+    .catch((error) => {
+      clearWhatsAppClientState();
+      if (!isConnectionTimeoutError(error)) {
+        console.error("WhatsApp warmup failed", error);
+      } else {
+        console.warn(String(error));
+      }
+      throw error;
+    });
+}
+
+async function waitForReadyClient(timeoutMs: number) {
+  warmUpWhatsAppClient();
+
+  const existing = globalForWhatsApp.whatsappClient;
+  if (existing && isClientUsable(existing)) {
+    return existing;
+  }
+
+  if (!globalForWhatsApp.whatsappClientPromise) {
+    return null;
+  }
+
+  const client = await Promise.race([
+    globalForWhatsApp.whatsappClientPromise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ]);
+
+  if (!client || !isClientUsable(client)) {
+    return null;
+  }
+
+  return client;
+}
+
+export type SendWhatsAppMediaResult = "sent" | "queued";
+
+export async function sendWhatsAppMediaMessage(params: {
+  whatsappNumber: string;
+  mediaBase64: string;
+  mediaFilename: string;
+  caption: string;
+}): Promise<SendWhatsAppMediaResult> {
+  if (!(await isWhatsAppEnabled())) {
+    throw new Error("WHATSAPP_DISABLED");
+  }
+
+  const client = await waitForReadyClient(SEND_READY_TIMEOUT_MS);
+  if (client) {
+    await sendQueuedMessage(client, params);
+    return "sent";
+  }
+
+  enqueueWhatsAppMessage(params);
+  warmUpWhatsAppClient();
+  return "queued";
+}
+
+export type SendWhatsAppTextResult = "sent" | "skipped";
+
+export async function sendWhatsAppTextMessage(params: {
+  whatsappNumber: string;
+  message: string;
+}): Promise<SendWhatsAppTextResult> {
+  if (!(await isWhatsAppEnabled())) {
+    return "skipped";
+  }
+
+  const client = await waitForReadyClient(SEND_READY_TIMEOUT_MS);
+  if (!client) {
+    warmUpWhatsAppClient();
+    console.warn("WhatsApp not ready; skipping text message");
+    return "skipped";
+  }
+
+  const numberId = await client.getNumberId(params.whatsappNumber);
+  if (!numberId) {
+    console.warn(`Phone ${params.whatsappNumber} is not on WhatsApp; skipping text message`);
+    return "skipped";
+  }
+
+  await client.sendMessage(numberId._serialized, params.message);
+  return "sent";
+}
+
+export async function getWhatsAppClient() {
+  if (!(await isWhatsAppEnabled())) {
+    throw new Error("WHATSAPP_DISABLED");
+  }
+
+  warmUpWhatsAppClient();
+
+  const client = await waitForReadyClient(WARMUP_READY_TIMEOUT_MS);
+  if (!client) {
+    throw new Error("WhatsApp is not ready yet");
+  }
+
+  return client;
+}
+
+export { getWhatsAppConnectionState } from "@/lib/whatsapp/whatsapp-connection-state";

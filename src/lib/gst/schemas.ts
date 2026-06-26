@@ -2,6 +2,10 @@ import { z } from "zod";
 import { idSchema } from "@/lib/ids";
 import { normalizeGstNumber } from "@/lib/gst/gst-number";
 import {
+  paymentAccountNameEnum,
+  paymentModeEnum,
+} from "@/lib/properties/schemas";
+import {
   CONSTITUTION_OF_BUSINESS_OPTIONS,
   GSTIN_STATUS_OPTIONS,
   TAXPAYER_TYPE_OPTIONS,
@@ -21,6 +25,7 @@ const nullableGstNumberSchema = trimmedString
 export const organizationStatusEnum = z.enum(["ACTIVE", "INACTIVE", "PENDING", "SUSPENDED"]);
 export const gstInvoiceTypeEnum = z.enum(["B2B_SALE", "B2C_SALE", "PURCHASE"]);
 export const gstPaymentStatusEnum = z.enum(["PENDING", "PARTIAL", "PAID"]);
+export const gstFilingStatusEnum = z.enum(["PENDING", "FILED"]);
 
 const addressSchema = z.object({
   line1: trimmedString.min(1).max(255),
@@ -48,7 +53,6 @@ const invoiceBaseSchema = z.object({
   taxableValue: z.coerce.number().nonnegative(),
   cess: z.coerce.number().nonnegative().default(0),
   description: trimmedString.max(2000).optional(),
-  paymentStatus: gstPaymentStatusEnum.default("PENDING"),
 });
 
 const taxConfigurationBaseSchema = z.object({
@@ -104,20 +108,21 @@ export const updateGstInvoiceSchema = z
     tradeName: trimmedString.max(255).nullable().optional(),
     customerName: trimmedString.max(255).nullable().optional(),
     customerAddress: trimmedString.max(2000).nullable().optional(),
+    customerGstNumber: optionalGstNumberSchema,
     taxableValue: z.coerce.number().nonnegative().optional(),
-    cgst: z.coerce.number().nonnegative().optional(),
-    sgst: z.coerce.number().nonnegative().optional(),
-    igst: z.coerce.number().nonnegative().optional(),
     cess: z.coerce.number().nonnegative().optional(),
-    totalTaxAmount: z.coerce.number().nonnegative().optional(),
-    invoiceValue: z.coerce.number().nonnegative().optional(),
     description: trimmedString.max(2000).nullable().optional(),
-    paymentStatus: gstPaymentStatusEnum.optional(),
+    filingStatus: gstFilingStatusEnum.optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
 
 export const gstInvoiceTypeQuerySchema = z.object({
   type: gstInvoiceTypeEnum,
+});
+
+export const bulkFileGstInvoicesSchema = z.object({
+  type: gstInvoiceTypeEnum,
+  month: z.string().regex(/^\d{4}-\d{2}$/, "Month must be YYYY-MM"),
 });
 
 export const gstInvoiceIdSchema = z.object({
@@ -176,7 +181,31 @@ const gstMasterBaseSchema = z.object({
   gstinStatus: gstMasterOptionSchema(GSTIN_STATUS_OPTIONS, "GSTIN / UIN status"),
   taxpayerType: gstMasterOptionSchema(TAXPAYER_TYPE_OPTIONS, "taxpayer type"),
   principalPlaceOfBusiness: trimmedString.min(1).max(2000),
+  primaryContact: trimmedString.max(255).optional(),
+  secondaryContact: trimmedString.max(255).optional(),
 });
+
+const ifscCodeSchema = trimmedString
+  .min(11)
+  .max(11)
+  .transform((value) => value.toUpperCase())
+  .refine((value) => /^[A-Z]{4}0[A-Z0-9]{6}$/.test(value), {
+    message: "Invalid IFSC code",
+  });
+
+export const gstMasterBankAccountBaseSchema = z.object({
+  accountHolderName: trimmedString.min(1).max(255),
+  bankName: trimmedString.min(1).max(255),
+  accountNumber: trimmedString.min(1).max(50),
+  branch: trimmedString.min(1).max(255),
+  ifscCode: ifscCodeSchema,
+});
+
+export const createGstMasterBankAccountSchema = gstMasterBankAccountBaseSchema;
+
+export const updateGstMasterBankAccountSchema = gstMasterBankAccountBaseSchema
+  .partial()
+  .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
 
 export const createGstMasterSchema = gstMasterBaseSchema;
 
@@ -190,4 +219,13 @@ export const gstMasterIdSchema = z.object({
 
 export const gstMasterSearchQuerySchema = z.object({
   q: trimmedString.min(7).max(100),
+});
+
+export const createGstPaymentSchema = z.object({
+  gstInvoiceId: idSchema,
+  amount: z.coerce.number().positive(),
+  mode: paymentModeEnum,
+  accountName: paymentAccountNameEnum.default("NONE"),
+  paidAt: z.coerce.date().optional(),
+  notes: trimmedString.max(2000).optional(),
 });

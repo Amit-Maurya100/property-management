@@ -22,6 +22,12 @@ const HUB_CARD_CONTENT = {
     href: "/hub/gst",
     accent: "violet" as const,
   },
+  portal: {
+    title: "Tenant Portal",
+    description: "View your profile, rent bills, and payment history.",
+    href: "/portal/profile",
+    accent: "emerald" as const,
+  },
 };
 
 export default async function DashboardPage() {

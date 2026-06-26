@@ -1,18 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { EntityCrudPanel } from "@/components/properties/entity-crud-panel";
+import { useCachedFetch } from "@/hooks/use-cached-fetch";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 
 const roomTypes = ["BEDROOM", "KITCHEN", "BATHROOM", "OFFICE_ROOM"];
 
-export function RoomsAdmin({ grants }: { grants: ResourceGrants }) {
-  const [units, setUnits] = useState<{ id: string; unitNumber: string }[]>([]);
-  const [unitId, setUnitId] = useState("");
+type UnitOption = { id: string; unitNumber: string };
 
-  useEffect(() => {
-    void fetch("/api/units").then((res) => res.json()).then((data) => setUnits(data));
-  }, []);
+export function RoomsAdmin({ grants }: { grants: ResourceGrants }) {
+  const [unitId, setUnitId] = useState("");
+  const { data: units = [] } = useCachedFetch<UnitOption[]>("/api/units");
+
+  const unitOptions = useMemo(
+    () => units.map((u) => ({ value: u.id, label: u.unitNumber })),
+    [units],
+  );
 
   return (
     <EntityCrudPanel
@@ -26,7 +30,7 @@ export function RoomsAdmin({ grants }: { grants: ResourceGrants }) {
           label: "Unit",
           type: "select",
           required: true,
-          options: units.map((u) => ({ value: u.id, label: u.unitNumber })),
+          options: unitOptions,
         },
         { key: "name", label: "Name", required: true },
         {

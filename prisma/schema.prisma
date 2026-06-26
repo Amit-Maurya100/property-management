@@ -36,15 +36,18 @@ model User {
   lockedUntil         DateTime?     @map("locked_until") @db.Timestamptz
   isLocked            Boolean       @default(false) @map("is_locked")
   accountStatus       AccountStatus @default(ACTIVE) @map("account_status")
+  mustChangePassword  Boolean       @default(false) @map("must_change_password")
   createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  userRoles    UserRole[]   @relation("UserRoles")
-  grantedRoles UserRole[]   @relation("GrantedBy")
-  loginAudits  LoginAudit[]
-  properties   Property[]   @relation("PropertyOwner")
-  tenants      Tenant[]     @relation("TenantOwner")
-  organizations Organization?
+  userRoles     UserRole[]   @relation("UserRoles")
+  grantedRoles  UserRole[]   @relation("GrantedBy")
+  loginAudits   LoginAudit[]
+  properties    Property[]   @relation("PropertyOwner")
+  tenants       Tenant[]     @relation("TenantOwner")
+  tenantProfile      Tenant?              @relation("TenantLoginUser")
+  organizations      Organization?
+  rentPaymentAccounts RentPaymentAccount[]
 
   @@index([username], map: "idx_users_username")
   @@index([email], map: "idx_users_email")
@@ -285,6 +288,16 @@ enum PaymentMode {
   OTHER
 
   @@map("payment_mode")
+}
+
+enum PaymentAccountName {
+  AMIT
+  SARITA
+  PYARI
+  DN
+  NONE
+
+  @@map("payment_account_name")
 }
 
 enum PaymentStatus {
@@ -536,17 +549,22 @@ model Tenant {
   idDocument String?  @map("id_document") @db.VarChar(100)
   pictureUrl String?  @map("picture_url") @db.VarChar(2048)
   advanceBalance Decimal @default(0) @map("advance_balance") @db.Decimal(12, 2)
+  securityDeposit Decimal @default(0) @map("security_deposit") @db.Decimal(12, 2)
+  userId         BigInt?  @unique @map("user_id")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   owner        User               @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  loginUser    User?              @relation("TenantLoginUser", fields: [userId], references: [id], onDelete: SetNull)
   unit         Unit?              @relation(fields: [unitId], references: [id], onDelete: SetNull)
   assignments  TenantAssignment[]
   rents        Rent[]
-  payments     Payment[]
+  payments              Payment[]
+  rentPaymentAssignments TenantRentPaymentAccount[]
 
   @@index([ownerId], map: "idx_tenants_owner_id")
   @@index([unitId], map: "idx_tenants_unit_id")
+  @@index([userId], map: "idx_tenants_user_id")
   @@index([email], map: "idx_tenants_email")
   @@map("tenants")
 }
@@ -596,6 +614,7 @@ model Rent {
   utilityRateSnapshot Json?         @map("utility_rate_snapshot")
   priorBalance        Decimal       @default(0) @map("prior_balance") @db.Decimal(12, 2)
   balanceCarriedForward Boolean     @default(false) @map("balance_carried_forward")
+  isExitRent            Boolean     @default(false) @map("is_exit_rent")
   paymentStatus       PaymentStatus @default(PENDING) @map("payment_status")
   createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
@@ -618,9 +637,10 @@ model Payment {
   uuid          String      @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   rentId        BigInt      @map("rent_id")
   tenantId      BigInt      @map("tenant_id")
-  amount        Decimal     @db.Decimal(12, 2)
+  amount        Decimal             @db.Decimal(12, 2)
   mode          PaymentMode
-  appliedToRent Decimal     @map("applied_to_rent") @db.Decimal(12, 2)
+  accountName   PaymentAccountName  @default(NONE) @map("account_name")
+  appliedToRent Decimal             @map("applied_to_rent") @db.Decimal(12, 2)
   toAdvance     Decimal     @default(0) @map("to_advance") @db.Decimal(12, 2)
   paidAt        DateTime    @default(now()) @map("paid_at") @db.Date
   notes         String?
@@ -653,6 +673,13 @@ enum GstInvoiceType {
   @@map("gst_invoice_type")
 }
 
+enum GstFilingStatus {
+  PENDING
+  FILED
+
+  @@map("gst_filing_status")
+}
+
 model Organization {
   id               BigInt             @id @default(autoincrement())
   uuid             String             @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -671,6 +698,7 @@ model Organization {
   invoices GstInvoice[]
   taxConfigurations GstTaxConfiguration[]
   gstMasters GstMaster[]
+  gstPayments GstPayment[]
 
   @@index([gstNumber], map: "idx_organizations_gst_number")
   @@map("organizations")
@@ -714,15 +742,40 @@ model GstInvoice {
   invoiceValue    Decimal        @map("invoice_value") @db.Decimal(12, 2)
   description     String?
   paymentStatus   PaymentStatus  @default(PENDING) @map("payment_status")
+  filingStatus    GstFilingStatus @default(PENDING) @map("filing_status")
   createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  payments       GstPayment[]
 
-  @@unique([organizationId, invoiceType, invoiceNumber], map: "unique_org_type_invoice_number")
+  @@index([organizationId, invoiceType, invoiceNumber, gstNumber], map: "idx_gst_invoices_org_type_number_gst")
   @@index([organizationId, invoiceType], map: "idx_gst_invoices_org_type")
   @@index([invoiceDate], map: "idx_gst_invoices_date")
   @@map("gst_invoices")
+}
+
+model GstPayment {
+  id               BigInt             @id @default(autoincrement())
+  uuid             String             @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  gstInvoiceId     BigInt             @map("gst_invoice_id")
+  organizationId   BigInt             @map("organization_id")
+  amount           Decimal            @db.Decimal(12, 2)
+  mode             PaymentMode
+  accountName      PaymentAccountName @default(NONE) @map("account_name")
+  appliedToInvoice Decimal            @map("applied_to_invoice") @db.Decimal(12, 2)
+  paidAt           DateTime           @default(now()) @map("paid_at") @db.Date
+  notes            String?
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  invoice      GstInvoice   @relation(fields: [gstInvoiceId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([gstInvoiceId], map: "idx_gst_payments_invoice_id")
+  @@index([organizationId], map: "idx_gst_payments_org_id")
+  @@index([paidAt], map: "idx_gst_payments_paid_at")
+  @@map("gst_payments")
 }
 
 model GstMaster {
@@ -737,13 +790,90 @@ model GstMaster {
   gstinStatus               String   @map("gstin_status") @db.VarChar(50)
   taxpayerType              String   @map("taxpayer_type") @db.VarChar(50)
   principalPlaceOfBusiness  String   @map("principal_place_of_business")
+  primaryContact            String?  @map("primary_contact") @db.VarChar(255)
+  secondaryContact          String?  @map("secondary_contact") @db.VarChar(255)
   createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt                 DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bankAccounts GstMasterBankAccount[]
 
   @@unique([organizationId, gstNumber], map: "unique_org_gst_master_number")
   @@index([organizationId], map: "idx_gst_masters_org")
   @@index([gstNumber], map: "idx_gst_masters_gst_number")
   @@map("gst_masters")
+}
+
+model GstMasterBankAccount {
+  id                BigInt   @id @default(autoincrement())
+  uuid              String   @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  gstMasterId       BigInt   @map("gst_master_id")
+  accountHolderName String   @map("account_holder_name") @db.VarChar(255)
+  bankName          String   @map("bank_name") @db.VarChar(255)
+  accountNumber     String   @map("account_number") @db.VarChar(50)
+  branch            String   @db.VarChar(255)
+  ifscCode          String   @map("ifsc_code") @db.VarChar(11)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  gstMaster GstMaster @relation(fields: [gstMasterId], references: [id], onDelete: Cascade)
+
+  @@index([gstMasterId], map: "idx_gst_master_bank_accounts_master")
+  @@map("gst_master_bank_accounts")
+}
+
+enum RentPaymentAccountType {
+  BANK
+  UPI
+
+  @@map("rent_payment_account_type")
+}
+
+model RentPaymentAccount {
+  id                BigInt                 @id @default(autoincrement())
+  uuid              String                 @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId           BigInt                 @map("owner_id")
+  label             String                 @db.VarChar(100)
+  accountType       RentPaymentAccountType @map("account_type")
+  accountHolderName String?                @map("account_holder_name") @db.VarChar(255)
+  bankName          String?                @map("bank_name") @db.VarChar(255)
+  accountNumber     String?                @map("account_number") @db.VarChar(50)
+  branch            String?                @db.VarChar(255)
+  ifscCode          String?                @map("ifsc_code") @db.VarChar(11)
+  upiId             String?                @map("upi_id") @db.VarChar(255)
+  upiBarcodeUrl     String?                @map("upi_barcode_url") @db.VarChar(2048)
+  isActive          Boolean                @default(true) @map("is_active")
+  sortOrder         Int                    @default(0) @map("sort_order")
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  owner    User                       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  tenants  TenantRentPaymentAccount[]
+
+  @@index([ownerId], map: "idx_rent_payment_accounts_owner_id")
+  @@index([isActive], map: "idx_rent_payment_accounts_active")
+  @@map("rent_payment_accounts")
+}
+
+model TenantRentPaymentAccount {
+  tenantId             BigInt   @map("tenant_id")
+  rentPaymentAccountId BigInt   @map("rent_payment_account_id")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  tenant  Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account RentPaymentAccount @relation(fields: [rentPaymentAccountId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, rentPaymentAccountId])
+  @@index([rentPaymentAccountId], map: "idx_tenant_rent_payment_accounts_account")
+  @@map("tenant_rent_payment_accounts")
+}
+
+model NotificationSettings {
+  id              Int      @id
+  emailEnabled    Boolean  @default(false) @map("email_enabled")
+  whatsappEnabled Boolean  @default(false) @map("whatsapp_enabled")
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  updatedById     BigInt?  @map("updated_by_id")
+
+  @@map("notification_settings")
 }

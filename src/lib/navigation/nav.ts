@@ -10,6 +10,7 @@ import {
 } from "@/lib/navigation/nav-client";
 import { GST_NAV_ITEMS } from "@/lib/navigation/gst-nav-items";
 import { PROPERTY_NAV_ITEMS } from "@/lib/navigation/property-nav-items";
+import { TENANT_PORTAL_NAV_ITEMS } from "@/lib/navigation/tenant-portal-nav-items";
 import {
   getSectionForPath,
   type HubSection,
@@ -29,6 +30,18 @@ export async function getVisiblePropertyNavItems(userId: string) {
   return filterAdminNavByPermissions(PROPERTY_NAV_ITEMS, granted);
 }
 
+export async function isTenantPortalUser(session: Session): Promise<boolean> {
+  const roles = session.user?.roles ?? [];
+  if (!roles.includes("tenant")) return false;
+  return !roles.some((role) => ["super_admin", "admin", "manager"].includes(role));
+}
+
+export async function getVisibleTenantPortalNavItems(userId: string) {
+  const rows = await getUserPermissionsFromDb(userId);
+  const granted = rows.map((row) => permissionKey(row.resource, row.action));
+  return filterAdminNavByPermissions(TENANT_PORTAL_NAV_ITEMS, granted);
+}
+
 export async function isCustomerUser(session: Session): Promise<boolean> {
   const roles = session.user?.roles ?? [];
   if (!roles.includes("customer")) return false;
@@ -38,7 +51,7 @@ export async function isCustomerUser(session: Session): Promise<boolean> {
 }
 
 export async function getVisibleGstNavItems(userId: string) {
-  const organization = await getOrganizationForUser(BigInt(userId));
+  const organization = await getOrganizationForUser(userId);
   if (!organization) return [];
 
   const rows = await getUserPermissionsFromDb(userId);
@@ -47,17 +60,20 @@ export async function getVisibleGstNavItems(userId: string) {
 }
 
 export async function getAppNavContext(session: Session): Promise<AppNavContext> {
-  const [adminNavItems, propertyNavItems, gstNavItems] = await Promise.all([
-    getVisibleAdminNavItems(session.user.id),
-    getVisiblePropertyNavItems(session.user.id),
-    getVisibleGstNavItems(session.user.id),
-  ]);
+  const [adminNavItems, propertyNavItems, gstNavItems, tenantPortalNavItems] =
+    await Promise.all([
+      getVisibleAdminNavItems(session.user.id),
+      getVisiblePropertyNavItems(session.user.id),
+      getVisibleGstNavItems(session.user.id),
+      getVisibleTenantPortalNavItems(session.user.id),
+    ]);
 
   return {
     homeHref: "/dashboard",
     adminItems: adminNavItems.map(({ href, label }) => ({ href, label })),
     propertyItems: propertyNavItems.map(({ href, label }) => ({ href, label })),
     gstItems: gstNavItems.map(({ href, label }) => ({ href, label })),
+    tenantPortalItems: tenantPortalNavItems.map(({ href, label }) => ({ href, label })),
   };
 }
 
@@ -69,7 +85,10 @@ export async function getAppNavItems(
   return getAppNavItemsForSection(context, getSectionForPath(pathname));
 }
 
-export async function getDefaultHomePath(_session: Session): Promise<string> {
+export async function getDefaultHomePath(session: Session): Promise<string> {
+  if (await isTenantPortalUser(session)) {
+    return "/portal/profile";
+  }
   return "/dashboard";
 }
 
