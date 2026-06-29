@@ -1,8 +1,14 @@
-import type { GstInvoiceType } from "@/generated/prisma/client";
+import type { GstInvoiceType, PaymentAccountName, PaymentMode } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { toMoney } from "@/lib/gst/tax-calculations";
 import { requireOrganizationForUser } from "@/lib/gst/organizations";
 import { resolveReportDateRange, type ReportPeriodMode } from "@/lib/gst/report-periods";
+import {
+  paymentAccountNameLabel,
+  paymentModeLabel,
+  type PaymentAccountNameValue,
+  type PaymentModeValue,
+} from "@/lib/properties/payment-calculations";
 
 export type GstReportBreakdown = {
   taxableValue: number;
@@ -13,6 +19,20 @@ export type GstReportBreakdown = {
   totalTax: number;
   grandTotal: number;
   invoiceCount: number;
+};
+
+export type GstReportPaymentRow = {
+  key: string;
+  label: string;
+  amount: number;
+};
+
+export type GstReportPaymentSummary = {
+  totalPaid: number;
+  paymentCount: number;
+  byAccountName: GstReportPaymentRow[];
+  byMode: GstReportPaymentRow[];
+  byInvoiceType: GstReportPaymentRow[];
 };
 
 export type GstReportResult = {
@@ -26,6 +46,8 @@ export type GstReportResult = {
   salesB2b: GstReportBreakdown;
   salesB2c: GstReportBreakdown;
   purchase: GstReportBreakdown;
+  salesPayments: GstReportPaymentSummary;
+  purchasePayments: GstReportPaymentSummary;
   insight: {
     salesGrandTotal: number;
     purchaseGrandTotal: number;
@@ -83,6 +105,104 @@ function combineBreakdowns(...parts: GstReportBreakdown[]): GstReportBreakdown {
     acc.invoiceCount += part.invoiceCount;
     return acc;
   }, emptyBreakdown());
+}
+
+function gstInvoiceTypeLabel(type: GstInvoiceType) {
+  if (type === "B2B_SALE") return "B2B Sale";
+  if (type === "B2C_SALE") return "B2C Sale";
+  return "Purchase";
+}
+
+function mapTotalsToRows<T extends string>(
+  totals: Map<T, number>,
+  labelFor: (key: T) => string,
+): GstReportPaymentRow[] {
+  return [...totals.entries()]
+    .map(([key, amount]) => ({
+      key,
+      label: labelFor(key),
+      amount,
+    }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+function aggregateGstPayments(
+  payments: Array<{
+    amount: MoneyField;
+    mode: PaymentMode;
+    accountName: PaymentAccountName;
+    invoice: { invoiceType: GstInvoiceType };
+  }>,
+): GstReportPaymentSummary {
+  const accountTotals = new Map<PaymentAccountNameValue, number>();
+  const modeTotals = new Map<PaymentModeValue, number>();
+  const invoiceTypeTotals = new Map<GstInvoiceType, number>();
+  let totalPaid = 0;
+
+  for (const payment of payments) {
+    const amount = toMoney(payment.amount);
+    totalPaid += amount;
+    accountTotals.set(
+      payment.accountName,
+      (accountTotals.get(payment.accountName) ?? 0) + amount,
+    );
+    modeTotals.set(payment.mode, (modeTotals.get(payment.mode) ?? 0) + amount);
+    invoiceTypeTotals.set(
+      payment.invoice.invoiceType,
+      (invoiceTypeTotals.get(payment.invoice.invoiceType) ?? 0) + amount,
+    );
+  }
+
+  return {
+    totalPaid,
+    paymentCount: payments.length,
+    byAccountName: mapTotalsToRows(accountTotals, paymentAccountNameLabel),
+    byMode: mapTotalsToRows(modeTotals, paymentModeLabel),
+    byInvoiceType: mapTotalsToRows(invoiceTypeTotals, gstInvoiceTypeLabel),
+  };
+}
+
+const emptyPaymentSummary = (): GstReportPaymentSummary => ({
+  totalPaid: 0,
+  paymentCount: 0,
+  byAccountName: [],
+  byMode: [],
+  byInvoiceType: [],
+});
+
+async function paymentSummariesForPeriod(
+  organizationId: bigint,
+  startDate: Date,
+  endDate: Date,
+) {
+  const payments = await prisma.gstPayment.findMany({
+    where: {
+      organizationId,
+      paidAt: { gte: startDate, lte: endDate },
+    },
+    select: {
+      amount: true,
+      mode: true,
+      accountName: true,
+      invoice: { select: { invoiceType: true } },
+    },
+  });
+
+  const salesPayments = payments.filter((payment) =>
+    payment.invoice.invoiceType === "B2B_SALE" || payment.invoice.invoiceType === "B2C_SALE",
+  );
+  const purchasePayments = payments.filter(
+    (payment) => payment.invoice.invoiceType === "PURCHASE",
+  );
+
+  return {
+    salesPayments: salesPayments.length
+      ? aggregateGstPayments(salesPayments)
+      : emptyPaymentSummary(),
+    purchasePayments: purchasePayments.length
+      ? aggregateGstPayments(purchasePayments)
+      : emptyPaymentSummary(),
+  };
 }
 
 async function listInvoicesForReport(
@@ -183,10 +303,11 @@ export async function getGstReport(
   const organization = await requireOrganizationForUser(userId);
   const range = resolveReportDateRange(input);
 
-  const [salesB2b, salesB2c, purchase] = await Promise.all([
+  const [salesB2b, salesB2c, purchase, paymentSummaries] = await Promise.all([
     breakdownForTypes(organization.id, ["B2B_SALE"], range.startDate, range.endDate),
     breakdownForTypes(organization.id, ["B2C_SALE"], range.startDate, range.endDate),
     breakdownForTypes(organization.id, ["PURCHASE"], range.startDate, range.endDate),
+    paymentSummariesForPeriod(organization.id, range.startDate, range.endDate),
   ]);
 
   const sales = combineBreakdowns(salesB2b, salesB2c);
@@ -205,6 +326,8 @@ export async function getGstReport(
     salesB2b,
     salesB2c,
     purchase,
+    salesPayments: paymentSummaries.salesPayments,
+    purchasePayments: paymentSummaries.purchasePayments,
     insight: {
       salesGrandTotal,
       purchaseGrandTotal,

@@ -17,6 +17,7 @@ export type SendRentGeneratedEmailResult =
 
 export async function sendRentGeneratedEmail(
   rentId: bigint,
+  options: { reminder?: boolean } = {},
 ): Promise<SendRentGeneratedEmailResult> {
   if (!(await isEmailEnabled())) {
     return { sent: false, reason: "not_enabled" };
@@ -54,6 +55,7 @@ export async function sendRentGeneratedEmail(
     priorBalance: data.priorBalance,
     amountDue: data.amountDue,
     isExitRent: data.isExitRent,
+    reminder: options.reminder,
   });
 
   const resend = new Resend(getResendApiKey());

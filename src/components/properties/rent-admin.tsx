@@ -17,6 +17,7 @@ import {
   calcDueDateFromPeriodStart,
   calcMonthlyPeriodEnd,
   calcRentBreakdown,
+  isRentDueForReminder,
   resolveUtilityBaselines,
   toNumber,
 } from "@/lib/properties/rent-calculations";
@@ -59,6 +60,7 @@ type RentRow = {
   maintenance?: string | null;
   misc?: string | null;
   dueDate: string;
+  paymentStatus: "PENDING" | "PARTIAL" | "PAID";
   utilityBaseline?: { electricityUnits: number; gasUnits: number } | null;
   utilityRateSnapshot?: BuildingUtilityRateSnapshot | null;
   tenant: { id: string; firstName: string; lastName: string };
@@ -93,6 +95,149 @@ function formatDate(value: string | null | undefined) {
 
 function tenantName(tenant: { firstName: string; lastName: string }) {
   return `${tenant.firstName} ${tenant.lastName}`;
+}
+
+function isRentUnpaid(paymentStatus: RentRow["paymentStatus"]) {
+  return paymentStatus !== "PAID";
+}
+
+function canSendRentReminder(row: Pick<RentRow, "dueDate" | "paymentStatus">) {
+  return isRentUnpaid(row.paymentStatus) && isRentDueForReminder(row.dueDate);
+}
+
+type RentReminderPreview = {
+  tenantName: string;
+  tenantEmail: string | null;
+  tenantPhone: string | null;
+  emailEnabled: boolean;
+  whatsappEnabled: boolean;
+  messages: {
+    emailSubject: string;
+    emailText: string;
+    whatsappText: string;
+    whatsappIncludesImage: boolean;
+  };
+};
+
+function formatReminderSendResult(result: {
+  email: { sent: boolean; reason?: string; email?: string };
+  whatsapp: { sent: boolean; reason?: string; phone?: string };
+}) {
+  const parts: string[] = [];
+  if (result.email.sent) {
+    parts.push(`email to ${result.email.email}`);
+  } else if (result.email.reason) {
+    parts.push(`email not sent (${result.email.reason})`);
+  }
+  if (result.whatsapp.sent) {
+    parts.push(`WhatsApp to ${result.whatsapp.phone}`);
+  } else if (result.whatsapp.reason === "queued") {
+    parts.push("WhatsApp queued until connected");
+  } else if (result.whatsapp.reason) {
+    parts.push(`WhatsApp not sent (${result.whatsapp.reason})`);
+  }
+  if (parts.length === 0) return "Reminder request completed.";
+  return `Sent: ${parts.join("; ")}.`;
+}
+
+function ReminderMessagePanel({
+  preview,
+  loading,
+  sendStatus,
+  sending,
+  onSend,
+  onClose,
+}: {
+  preview: RentReminderPreview | null;
+  loading: boolean;
+  sendStatus: string | null;
+  sending: boolean;
+  onSend: () => void;
+  onClose: () => void;
+}) {
+  if (loading) {
+    return <p className="text-sm text-slate-400">Loading reminder messages...</p>;
+  }
+  if (!preview) return null;
+
+  const messageBoxClass =
+    "mt-2 w-full min-h-[12rem] resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 whitespace-pre-wrap";
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold text-white">Payment reminder</h3>
+          <p className="mt-1 text-sm text-slate-400">{preview.tenantName}</p>
+        </div>
+        <button type="button" className={buttonSecondaryClass} onClick={onClose}>
+          Close
+        </button>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <h4 className="text-sm font-medium text-slate-200">Email message</h4>
+          <p className="mt-1 text-xs text-slate-500">
+            {preview.emailEnabled
+              ? preview.tenantEmail
+                ? `To: ${preview.tenantEmail}`
+                : "Tenant has no email on file"
+              : "Email notifications are disabled in settings"}
+          </p>
+          <p className="mt-3 text-xs font-medium text-slate-400">Subject</p>
+          <p className="mt-1 text-sm text-slate-200">{preview.messages.emailSubject}</p>
+          <p className="mt-3 text-xs font-medium text-slate-400">Body</p>
+          <textarea
+            readOnly
+            value={preview.messages.emailText}
+            className={messageBoxClass}
+            rows={14}
+          />
+        </section>
+
+        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <h4 className="text-sm font-medium text-slate-200">WhatsApp message</h4>
+          <p className="mt-1 text-xs text-slate-500">
+            {preview.whatsappEnabled
+              ? preview.tenantPhone
+                ? `To: ${preview.tenantPhone}`
+                : "Tenant has no phone on file"
+              : "WhatsApp notifications are disabled in settings"}
+          </p>
+          {preview.messages.whatsappIncludesImage ? (
+            <p className="mt-2 text-xs text-slate-500">
+              Rent invoice image is attached with this caption.
+            </p>
+          ) : null}
+          <p className="mt-3 text-xs font-medium text-slate-400">Caption</p>
+          <textarea
+            readOnly
+            value={preview.messages.whatsappText}
+            className={messageBoxClass}
+            rows={14}
+          />
+        </section>
+      </div>
+
+      {sendStatus ? (
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+          {sendStatus}
+        </p>
+      ) : null}
+
+      <div>
+        <button
+          type="button"
+          className={buttonPrimaryClass}
+          disabled={sending || (!preview.emailEnabled && !preview.whatsappEnabled)}
+          onClick={onSend}
+        >
+          {sending ? "Sending reminder..." : "Send reminder"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function baselineSourceLabel(source: "stored" | "assignment" | "prior_bill") {
@@ -159,6 +304,11 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
   const [filterTenantId, setFilterTenantId] = useState("");
   const [rentListPage, setRentListPage] = useState(1);
   const [viewingRentId, setViewingRentId] = useState<string | null>(null);
+  const [reminderRentId, setReminderRentId] = useState<string | null>(null);
+  const [reminderPreview, setReminderPreview] = useState<RentReminderPreview | null>(null);
+  const [loadingReminderPreview, setLoadingReminderPreview] = useState(false);
+  const [sendingReminderId, setSendingReminderId] = useState<string | null>(null);
+  const [reminderSendStatus, setReminderSendStatus] = useState<string | null>(null);
   const [utilityRates, setUtilityRates] = useState<BuildingUtilityRateSnapshot | null>(null);
   const [utilityRateError, setUtilityRateError] = useState<string | null>(null);
 
@@ -197,6 +347,66 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
 
     return () => controller.abort();
   }, [activeUnitId, monthlyForm.startDate, editingRent?.utilityRateSnapshot]);
+
+  async function handleToggleReminder(row: RentRow) {
+    if (reminderRentId === row.id) {
+      setReminderRentId(null);
+      setReminderPreview(null);
+      setReminderSendStatus(null);
+      return;
+    }
+
+    setReminderRentId(row.id);
+    setViewingRentId(null);
+    setReminderPreview(null);
+    setReminderSendStatus(null);
+    setError(null);
+    setLoadingReminderPreview(true);
+
+    try {
+      const res = await fetch(`/api/rents/${row.id}/reminder`);
+      if (!res.ok) throw new Error(await readApiError(res));
+      setReminderPreview((await res.json()) as RentReminderPreview);
+    } catch (err) {
+      setReminderRentId(null);
+      setError(err instanceof Error ? err.message : "Failed to load reminder preview");
+    } finally {
+      setLoadingReminderPreview(false);
+    }
+  }
+
+  function closeReminderPanel() {
+    setReminderRentId(null);
+    setReminderPreview(null);
+    setReminderSendStatus(null);
+  }
+
+  async function handleSendReminder(rentId: string) {
+    setError(null);
+    setReminderSendStatus(null);
+    setSendingReminderId(rentId);
+    try {
+      const res = await fetch(`/api/rents/${rentId}/reminder`, { method: "POST" });
+      if (!res.ok) throw new Error(await readApiError(res));
+      const result = (await res.json()) as {
+        email: { sent: boolean; reason?: string; email?: string };
+        whatsapp: { sent: boolean; reason?: string; phone?: string };
+        messages: RentReminderPreview["messages"];
+      };
+      if (result.messages) {
+        setReminderPreview((current) =>
+          current
+            ? { ...current, messages: result.messages }
+            : current,
+        );
+      }
+      setReminderSendStatus(formatReminderSendResult(result));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send reminder");
+    } finally {
+      setSendingReminderId(null);
+    }
+  }
 
   const sortedDisplayedRents = useMemo(() => {
     const filtered = filterTenantId
@@ -714,6 +924,7 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                     })
                   : null;
                 const isViewing = viewingRentId === row.id;
+                const isReminderOpen = reminderRentId === row.id;
 
                 return (
                   <Fragment key={row.id}>
@@ -741,16 +952,36 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                             <button
                               type="button"
                               className={buttonSecondaryClass}
-                              onClick={() =>
-                                setViewingRentId(isViewing ? null : row.id)
-                              }
+                              onClick={() => {
+                                setViewingRentId(isViewing ? null : row.id);
+                                if (!isViewing) closeReminderPanel();
+                              }}
                             >
                               {isViewing ? "Hide" : "Breakdown"}
                             </button>
                           ) : null}
+                          {grants.canUpdate && canSendRentReminder(row) ? (
+                            <button
+                              type="button"
+                              className={buttonSecondaryClass}
+                              disabled={
+                                submitting ||
+                                deletingId !== null ||
+                                sendingReminderId !== null ||
+                                (loadingReminderPreview && isReminderOpen)
+                              }
+                              onClick={() => void handleToggleReminder(row)}
+                            >
+                              {loadingReminderPreview && isReminderOpen
+                                ? "Loading..."
+                                : isReminderOpen
+                                  ? "Hide"
+                                  : "Reminder"}
+                            </button>
+                          ) : null}
                           <RowActions
-                            canUpdate={grants.canUpdate}
-                            canDelete={grants.canDelete}
+                            canUpdate={grants.canUpdate && isRentUnpaid(row.paymentStatus)}
+                            canDelete={grants.canDelete && isRentUnpaid(row.paymentStatus)}
                             onEdit={() => {
                               setEditingRent(row);
                               setViewingRentId(null);
@@ -797,6 +1028,20 @@ export function RentAdmin({ grants }: { grants: ResourceGrants }) {
                                 ? `${formatDate(row.startDate)} to ${formatDate(row.endDate)}`
                                 : formatDate(row.startDate),
                             ].join(" · ")}
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                    {isReminderOpen ? (
+                      <tr key={`${row.id}-reminder`} className="border-t border-slate-800 bg-slate-950/40">
+                        <td colSpan={RENT_LIST_COL_SPAN} className="px-4 py-4">
+                          <ReminderMessagePanel
+                            preview={reminderPreview}
+                            loading={loadingReminderPreview}
+                            sendStatus={reminderSendStatus}
+                            sending={sendingReminderId === row.id}
+                            onSend={() => void handleSendReminder(row.id)}
+                            onClose={closeReminderPanel}
                           />
                         </td>
                       </tr>

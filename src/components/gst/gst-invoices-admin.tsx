@@ -720,6 +720,21 @@ export function GstInvoicesAdmin({
               ))}
             </select>
           </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-300">Filing status</label>
+            <select
+              value={search.filingStatus}
+              onChange={(e) => setSearch((prev) => ({ ...prev, filingStatus: e.target.value }))}
+              className={inputClass}
+            >
+              <option value="">All statuses</option>
+              {FILING_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {filingStatusLabel(status)}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         {!loading ? (
           <p className="mt-3 text-xs text-slate-500">

@@ -25,6 +25,7 @@ export type SendRentGeneratedWhatsAppResult =
 
 export async function sendRentGeneratedWhatsApp(
   rentId: bigint,
+  options: { reminder?: boolean } = {},
 ): Promise<SendRentGeneratedWhatsAppResult> {
   if (!(await isWhatsAppEnabled())) {
     console.warn("WhatsApp is not enabled; skipping rent notification");
@@ -65,6 +66,7 @@ export async function sendRentGeneratedWhatsApp(
     priorBalance: data.priorBalance,
     amountDue: data.amountDue,
     isExitRent: data.isExitRent,
+    reminder: options.reminder,
   });
 
   const caption =

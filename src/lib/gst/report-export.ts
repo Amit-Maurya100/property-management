@@ -65,6 +65,27 @@ function totalsRow(label: string, data: GstReportExportData["sales"]) {
   ];
 }
 
+function paymentBreakupRows(
+  title: string,
+  summary: GstReportExportData["salesPayments"],
+  sections: Array<{
+    heading: string;
+    rows: GstReportExportData["salesPayments"]["byAccountName"];
+  }>,
+) {
+  const output: (string | number)[][] = [[title], ["Total paid", summary.totalPaid], ["Payment count", summary.paymentCount], []];
+
+  for (const section of sections) {
+    output.push([section.heading], ["Name", "Amount"]);
+    for (const row of section.rows) {
+      output.push([row.label, row.amount]);
+    }
+    output.push(["Total", summary.totalPaid], []);
+  }
+
+  return output;
+}
+
 export async function buildGstReportWorkbook(data: GstReportExportData) {
   const rows: (string | number)[][] = [
     ["GST Report"],
@@ -83,6 +104,15 @@ export async function buildGstReportWorkbook(data: GstReportExportData) {
     ...data.purchaseInvoices.map(invoiceToRow),
     totalsRow("Purchase Total", data.purchase),
     [],
+    ...paymentBreakupRows("SALES PAYMENTS", data.salesPayments, [
+      { heading: "By invoice type", rows: data.salesPayments.byInvoiceType },
+      { heading: "By account", rows: data.salesPayments.byAccountName },
+      { heading: "By payment mode", rows: data.salesPayments.byMode },
+    ]),
+    ...paymentBreakupRows("PURCHASE PAYMENTS", data.purchasePayments, [
+      { heading: "By account", rows: data.purchasePayments.byAccountName },
+      { heading: "By payment mode", rows: data.purchasePayments.byMode },
+    ]),
     ["SUMMARY"],
     ["Total Sales", data.sales.grandTotal],
     ["Total Purchase", data.purchase.grandTotal],

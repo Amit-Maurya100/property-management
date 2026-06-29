@@ -15,8 +15,13 @@ import { getActiveTenantAssignment } from "@/lib/properties/tenant-assignments";
 import { carryForwardTenantBalance } from "@/lib/properties/payments";
 import { sendRentGeneratedEmail } from "@/lib/email/send-rent-generated-email";
 import { sendRentGeneratedWhatsApp } from "@/lib/whatsapp/send-rent-generated-whatsapp";
+import { isEmailEnabled } from "@/lib/email/resend-config";
+import { isWhatsAppEnabled } from "@/lib/whatsapp/whatsapp-config";
+import { loadRentGeneratedNotification } from "@/lib/notifications/rent-generated-payload";
+import { buildRentReminderMessages } from "@/lib/notifications/rent-reminder-messages";
 import {
   calcTotalRent,
+  isRentDueForReminder,
   resolveUtilityBaselines,
   type ProrataPeriod,
 } from "@/lib/properties/rent-calculations";
@@ -80,6 +85,7 @@ const rentSelect = {
   utilityBaseline: true,
   utilityRateSnapshot: true,
   isExitRent: true,
+  paymentStatus: true,
   createdAt: true,
   updatedAt: true,
   tenant: {
@@ -339,6 +345,7 @@ export async function updateRent(
   const existing = await prisma.rent.findUnique({
     where: { id: rentId },
     select: {
+      paymentStatus: true,
       tenantId: true,
       unitId: true,
       tenantAssignmentId: true,
@@ -354,6 +361,9 @@ export async function updateRent(
     },
   });
   if (!existing) throw new Error("NOT_FOUND");
+  if (existing.paymentStatus === "PAID") {
+    throw new Error("BAD_REQUEST:Paid rent records cannot be edited");
+  }
 
   const tenantId = data.tenantId ?? existing.tenantId;
   const unitId = data.unitId ?? existing.unitId;
@@ -478,5 +488,103 @@ export async function updateRent(
 
 export async function deleteRent(ctx: PropertyAccessContext, id: IdInput) {
   await assertUserOwnsRent(ctx, id);
-  await prisma.rent.delete({ where: { id: parseId(id) } });
+  const rentId = parseId(id);
+  const rent = await prisma.rent.findUnique({
+    where: { id: rentId },
+    select: { paymentStatus: true },
+  });
+  if (!rent) throw new Error("NOT_FOUND");
+  if (rent.paymentStatus === "PAID") {
+    throw new Error("BAD_REQUEST:Paid rent records cannot be deleted");
+  }
+  await prisma.rent.delete({ where: { id: rentId } });
+}
+
+export type RentReminderPreview = {
+  tenantName: string;
+  tenantEmail: string | null;
+  tenantPhone: string | null;
+  emailEnabled: boolean;
+  whatsappEnabled: boolean;
+  messages: ReturnType<typeof buildRentReminderMessages>;
+};
+
+async function assertRentEligibleForReminder(rentId: bigint) {
+  const rent = await prisma.rent.findUnique({
+    where: { id: rentId },
+    select: { dueDate: true, paymentStatus: true },
+  });
+  if (!rent) throw new Error("NOT_FOUND");
+  if (rent.paymentStatus === "PAID") {
+    throw new Error("BAD_REQUEST:Reminder is not needed for a fully paid rent");
+  }
+  if (!isRentDueForReminder(rent.dueDate.toISOString())) {
+    throw new Error("BAD_REQUEST:Reminder can only be sent on or after the due date");
+  }
+}
+
+export async function getRentReminderPreview(
+  ctx: PropertyAccessContext,
+  id: IdInput,
+): Promise<RentReminderPreview> {
+  await assertUserOwnsRent(ctx, id);
+  const rentId = parseId(id);
+  await assertRentEligibleForReminder(rentId);
+
+  const loaded = await loadRentGeneratedNotification(rentId);
+  if (!loaded.ok) {
+    if (loaded.reason === "not_found") throw new Error("NOT_FOUND");
+    throw new Error("BAD_REQUEST:Could not build rent reminder message");
+  }
+
+  const [emailEnabled, whatsappEnabled] = await Promise.all([
+    isEmailEnabled(),
+    isWhatsAppEnabled(),
+  ]);
+
+  return {
+    tenantName: loaded.data.tenantName,
+    tenantEmail: loaded.data.tenantEmail,
+    tenantPhone: loaded.data.tenantPhone,
+    emailEnabled,
+    whatsappEnabled,
+    messages: buildRentReminderMessages(loaded.data),
+  };
+}
+
+export type SendRentReminderResult = {
+  email: Awaited<ReturnType<typeof sendRentGeneratedEmail>>;
+  whatsapp: Awaited<ReturnType<typeof sendRentGeneratedWhatsApp>>;
+  messages: ReturnType<typeof buildRentReminderMessages>;
+};
+
+export async function sendRentReminder(
+  ctx: PropertyAccessContext,
+  id: IdInput,
+): Promise<SendRentReminderResult> {
+  await assertUserOwnsRent(ctx, id);
+  const rentId = parseId(id);
+  await assertRentEligibleForReminder(rentId);
+
+  const loaded = await loadRentGeneratedNotification(rentId);
+  if (!loaded.ok) {
+    if (loaded.reason === "not_found") throw new Error("NOT_FOUND");
+    throw new Error("BAD_REQUEST:Could not build rent reminder message");
+  }
+  const messages = buildRentReminderMessages(loaded.data);
+
+  const [email, whatsapp] = await Promise.all([
+    sendRentGeneratedEmail(rentId, { reminder: true }),
+    sendRentGeneratedWhatsApp(rentId, { reminder: true }),
+  ]);
+
+  const delivered =
+    email.sent || whatsapp.sent || whatsapp.reason === "queued";
+
+  if (!delivered) {
+    const reasons = [email.reason, whatsapp.reason].filter(Boolean).join(", ");
+    throw new Error(`BAD_REQUEST:Could not send reminder (${reasons || "no channels available"})`);
+  }
+
+  return { email, whatsapp, messages };
 }
