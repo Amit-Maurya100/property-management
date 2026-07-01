@@ -9,6 +9,13 @@ import {
 import { DatePickerField } from "@/components/properties/date-picker-field";
 import { useCachedList } from "@/hooks/use-cached-list";
 import { fetchMutation } from "@/lib/api/client-cache";
+import {
+  emptyGstPaymentSearch,
+  filterGstInvoicePaymentRows,
+  hasActiveGstPaymentSearch,
+  countMatchingGstPayments,
+  type GstPaymentSearchFilters,
+} from "@/lib/gst/payment-filters";
 import type { ResourceGrants } from "@/lib/permissions/grants";
 import {
   formatMoney,
@@ -97,6 +104,7 @@ function toMoney(value: string | number) {
 export function GstPaymentsAdmin({ grants }: { grants: ResourceGrants }) {
   const [filterType, setFilterType] = useState<"" | GstInvoiceType>("");
   const [showAll, setShowAll] = useState(false);
+  const [search, setSearch] = useState<GstPaymentSearchFilters>(emptyGstPaymentSearch);
   const [payingInvoiceId, setPayingInvoiceId] = useState<string | null>(null);
   const [viewingInvoiceId, setViewingInvoiceId] = useState<string | null>(null);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
@@ -120,9 +128,19 @@ export function GstPaymentsAdmin({ grants }: { grants: ResourceGrants }) {
     invalidate,
   } = useCachedList<GstInvoicePaymentRow>(invoicesUrl);
 
+  const filteredRows = useMemo(
+    () => filterGstInvoicePaymentRows(rows, search),
+    [rows, search],
+  );
+
+  const matchingPaymentCount = useMemo(
+    () => countMatchingGstPayments(filteredRows),
+    [filteredRows],
+  );
+
   const payingInvoice = useMemo(
-    () => rows.find((row) => row.id === payingInvoiceId) ?? null,
-    [rows, payingInvoiceId],
+    () => filteredRows.find((row) => row.id === payingInvoiceId) ?? rows.find((row) => row.id === payingInvoiceId) ?? null,
+    [filteredRows, rows, payingInvoiceId],
   );
 
   async function handlePaymentSubmit(event: FormEvent) {
@@ -224,6 +242,78 @@ export function GstPaymentsAdmin({ grants }: { grants: ResourceGrants }) {
             Show paid invoices too
           </label>
         </div>
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 className="text-sm font-medium text-slate-200">Search payments</h2>
+          {hasActiveGstPaymentSearch(search) ? (
+            <button
+              type="button"
+              className={buttonSecondaryClass}
+              onClick={() => setSearch(emptyGstPaymentSearch)}
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <label className="mb-1 block text-sm text-slate-300">AC name</label>
+            <select
+              value={search.accountName}
+              onChange={(e) => setSearch((prev) => ({ ...prev, accountName: e.target.value }))}
+              className={inputClass}
+            >
+              <option value="">All accounts</option>
+              {PAYMENT_ACCOUNT_NAMES.map((accountName) => (
+                <option key={accountName} value={accountName}>
+                  {paymentAccountNameLabel(accountName)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-300">Payment type</label>
+            <select
+              value={search.mode}
+              onChange={(e) => setSearch((prev) => ({ ...prev, mode: e.target.value }))}
+              className={inputClass}
+            >
+              <option value="">All types</option>
+              {PAYMENT_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {paymentModeLabel(mode)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-300">Payment date from</label>
+            <input
+              type="date"
+              value={search.dateFrom}
+              onChange={(e) => setSearch((prev) => ({ ...prev, dateFrom: e.target.value }))}
+              className={inputClass}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-300">Payment date to</label>
+            <input
+              type="date"
+              value={search.dateTo}
+              onChange={(e) => setSearch((prev) => ({ ...prev, dateTo: e.target.value }))}
+              className={inputClass}
+            />
+          </div>
+        </div>
+        {!loading ? (
+          <p className="mt-3 text-xs text-slate-500">
+            {hasActiveGstPaymentSearch(search)
+              ? `Showing ${filteredRows.length} invoice${filteredRows.length === 1 ? "" : "s"} with ${matchingPaymentCount} matching payment${matchingPaymentCount === 1 ? "" : "s"}`
+              : `Showing ${rows.length} invoice${rows.length === 1 ? "" : "s"}`}
+          </p>
+        ) : null}
       </div>
 
       {payingInvoice && grants.canCreate ? (
@@ -354,17 +444,20 @@ export function GstPaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                   Loading...
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : filteredRows.length === 0 ? (
               <tr>
                 <td colSpan={9} className="px-4 py-8 text-slate-400">
-                  {showAll
-                    ? "No GST invoices yet."
-                    : "No pending or partially paid GST invoices."}
+                  {hasActiveGstPaymentSearch(search)
+                    ? "No payments match your search."
+                    : showAll
+                      ? "No GST invoices yet."
+                      : "No pending or partially paid GST invoices."}
                 </td>
               </tr>
             ) : (
-              rows.map((row) => {
+              filteredRows.map((row) => {
                 const isViewing = viewingInvoiceId === row.id;
+                const paymentsToShow = row.filteredPayments;
                 return (
                   <Fragment key={row.id}>
                     <tr className="border-t border-slate-800">
@@ -394,7 +487,7 @@ export function GstPaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                               Pay
                             </button>
                           ) : null}
-                          {row.payments.length > 0 ? (
+                          {paymentsToShow.length > 0 ? (
                             <button
                               type="button"
                               className={buttonSecondaryClass}
@@ -427,7 +520,7 @@ export function GstPaymentsAdmin({ grants }: { grants: ResourceGrants }) {
                                 </tr>
                               </thead>
                               <tbody>
-                                {row.payments.map((payment) => (
+                                {paymentsToShow.map((payment) => (
                                   <tr key={payment.id} className="border-t border-slate-800">
                                     <td className="px-3 py-2">{formatDate(payment.paidAt)}</td>
                                     <td className="px-3 py-2">{paymentModeLabel(payment.mode)}</td>

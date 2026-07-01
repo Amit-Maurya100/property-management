@@ -32,6 +32,12 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     resource: "login_audit",
     action: "read",
   },
+  {
+    href: "/admin/quote-requests",
+    label: "Quote Requests",
+    resource: "quote_request",
+    action: "read",
+  },
 ];
 
 function permissionKey(resource: string, action: string) {

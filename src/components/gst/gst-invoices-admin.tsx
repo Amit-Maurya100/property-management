@@ -8,6 +8,7 @@ import {
   saveButtonLabel,
 } from "@/components/admin/ui";
 import { DatePickerField } from "@/components/properties/date-picker-field";
+import { RowActions } from "@/components/admin/row-actions";
 import { useCachedFetch } from "@/hooks/use-cached-fetch";
 import { useCachedList } from "@/hooks/use-cached-list";
 import { fetchJson } from "@/lib/api/client-cache";
@@ -86,6 +87,10 @@ function paymentStatusClass(status: InvoiceRow["paymentStatus"]) {
   return "text-slate-300";
 }
 
+function isGstInvoiceDeletable(paymentStatus: InvoiceRow["paymentStatus"]) {
+  return paymentStatus !== "PAID";
+}
+
 function filingStatusClass(status: InvoiceRow["filingStatus"]) {
   if (status === "FILED") return "text-emerald-400 font-medium";
   return "text-slate-300";
@@ -139,8 +144,10 @@ export function GstInvoicesAdmin({
     loading,
     error,
     submitting,
+    deletingId,
     setError,
     save,
+    remove,
     invalidate,
   } = useCachedList<InvoiceRow>(listUrl);
 
@@ -720,6 +727,21 @@ export function GstInvoicesAdmin({
               ))}
             </select>
           </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-300">Filing status</label>
+            <select
+              value={search.filingStatus}
+              onChange={(e) => setSearch((prev) => ({ ...prev, filingStatus: e.target.value }))}
+              className={inputClass}
+            >
+              <option value="">All statuses</option>
+              {FILING_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {filingStatusLabel(status)}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         {!loading ? (
           <p className="mt-3 text-xs text-slate-500">
@@ -754,7 +776,9 @@ export function GstInvoicesAdmin({
               <th className="px-3 py-2 whitespace-nowrap">Total tax</th>
               <th className="px-3 py-2 whitespace-nowrap">Value</th>
               <th className="px-3 py-2 whitespace-nowrap">Payment</th>
-              {grants.canUpdate ? <th className="px-3 py-2">Actions</th> : null}
+              {grants.canUpdate || grants.canDelete ? (
+                <th className="px-3 py-2">Actions</th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
@@ -840,17 +864,38 @@ export function GstInvoicesAdmin({
                   <td className={`px-3 py-2 whitespace-nowrap ${paymentStatusClass(row.paymentStatus)}`}>
                     {paymentStatusLabel(row.paymentStatus)}
                   </td>
-                  {grants.canUpdate ? (
+                  {grants.canUpdate || grants.canDelete ? (
                     <td className="px-3 py-2">
-                      {row.paymentStatus !== "PAID" ? (
-                        <button
-                          type="button"
-                          className={buttonSecondaryClass}
+                      {isGstInvoiceDeletable(row.paymentStatus) ? (
+                        <RowActions
+                          canUpdate={grants.canUpdate}
+                          canDelete={grants.canDelete}
+                          onEdit={() => startEdit(row)}
+                          onDelete={async () => {
+                            if (
+                              !confirm(
+                                row.paymentStatus === "PARTIAL"
+                                  ? "Delete this invoice and its recorded payments?"
+                                  : "Delete this invoice?",
+                              )
+                            ) {
+                              return;
+                            }
+                            setError(null);
+                            try {
+                              await remove(`/api/gst/invoices/${row.id}`, row.id);
+                              if (editingId === row.id) {
+                                setEditingId(null);
+                                setShowForm(false);
+                                setForm(emptyForm);
+                              }
+                            } catch {
+                              // Error message is set by the cache hook.
+                            }
+                          }}
+                          deleting={deletingId === row.id}
                           disabled={submitting || updatingFilingId !== null}
-                          onClick={() => startEdit(row)}
-                        >
-                          Edit
-                        </button>
+                        />
                       ) : (
                         <span className="text-slate-500">—</span>
                       )}

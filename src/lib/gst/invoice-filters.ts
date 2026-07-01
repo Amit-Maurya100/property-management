@@ -6,6 +6,7 @@ export type GstInvoiceSearchFilters = {
   gstNumber: string;
   taxableValue: string;
   paymentStatus: string;
+  filingStatus: string;
 };
 
 export const emptyGstInvoiceSearch: GstInvoiceSearchFilters = {
@@ -16,6 +17,7 @@ export const emptyGstInvoiceSearch: GstInvoiceSearchFilters = {
   gstNumber: "",
   taxableValue: "",
   paymentStatus: "",
+  filingStatus: "",
 };
 
 type SearchableInvoice = {
@@ -27,6 +29,7 @@ type SearchableInvoice = {
   customerAddress?: string | null;
   taxableValue: string | number;
   paymentStatus: string;
+  filingStatus: string;
 };
 
 function formatDate(value: string) {
@@ -71,6 +74,7 @@ export function filterGstInvoices<T extends SearchableInvoice>(
     }
 
     if (filters.paymentStatus && row.paymentStatus !== filters.paymentStatus) return false;
+    if (filters.filingStatus && row.filingStatus !== filters.filingStatus) return false;
 
     return true;
   });

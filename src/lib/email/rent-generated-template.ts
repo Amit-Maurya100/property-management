@@ -80,13 +80,16 @@ export function buildRentGeneratedEmail(params: {
   priorBalance: number;
   amountDue: number;
   isExitRent: boolean;
+  reminder?: boolean;
 }): RentGeneratedEmailContent {
   const periodLabel = params.periodEnd
     ? `${formatDisplayDate(params.periodStart)} – ${formatDisplayDate(params.periodEnd)}`
     : formatDisplayDate(params.periodStart);
 
   const billType = params.isExitRent ? "Exit rent bill" : "Rent bill";
-  const subject = `${billType} – ${periodLabel} – Unit ${params.unitNumber}`;
+  const subject = params.reminder
+    ? `Payment reminder – ${billType} – ${periodLabel} – Unit ${params.unitNumber}`
+    : `${billType} – ${periodLabel} – Unit ${params.unitNumber}`;
 
   const lineItemsText = params.lineItems
     .map((item) => {
@@ -95,10 +98,14 @@ export function buildRentGeneratedEmail(params: {
     })
     .join("\n");
 
+  const introLine = params.reminder
+    ? `This is a friendly reminder that your ${billType.toLowerCase()} for ${periodLabel} was due on ${formatDisplayDate(params.dueDate)}. The outstanding amount is shown below.`
+    : `Your ${billType.toLowerCase()} for ${periodLabel} has been generated.`;
+
   const text = [
     `Dear ${params.tenantName},`,
     "",
-    `Your ${billType.toLowerCase()} for ${periodLabel} has been generated.`,
+    introLine,
     "",
     `Property: ${params.propertyName}`,
     `Building: ${params.buildingName}`,
@@ -154,7 +161,7 @@ export function buildRentGeneratedEmail(params: {
             <tr>
               <td style="padding:24px 24px 12px;">
                 <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#34d399;">${escapeHtml(COMPANY_NAME)}</p>
-                <h1 style="margin:0;font-size:24px;color:#f8fafc;">${escapeHtml(billType)}</h1>
+                <h1 style="margin:0;font-size:24px;color:#f8fafc;">${escapeHtml(params.reminder ? "Payment reminder" : billType)}</h1>
                 <p style="margin:8px 0 0;font-size:14px;color:#94a3b8;">${escapeHtml(periodLabel)}</p>
               </td>
             </tr>
@@ -162,7 +169,11 @@ export function buildRentGeneratedEmail(params: {
               <td style="padding:0 24px 16px;">
                 <p style="margin:0 0 12px;font-size:15px;color:#e2e8f0;">Dear ${escapeHtml(params.tenantName)},</p>
                 <p style="margin:0;font-size:14px;color:#cbd5e1;line-height:1.6;">
-                  Your rent statement for the period below is ready. Please find the breakdown and total amount due.
+                  ${
+                    params.reminder
+                      ? `This is a friendly reminder that your rent payment was due on ${escapeHtml(formatDisplayDate(params.dueDate))}. Please find the breakdown and outstanding amount below.`
+                      : "Your rent statement for the period below is ready. Please find the breakdown and total amount due."
+                  }
                 </p>
               </td>
             </tr>

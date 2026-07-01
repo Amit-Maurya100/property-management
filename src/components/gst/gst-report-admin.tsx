@@ -6,7 +6,7 @@ import { useCachedFetch } from "@/hooks/use-cached-fetch";
 import { readApiError } from "@/lib/api/parse-response";
 import { getFinancialQuarter, getFinancialYearStart } from "@/lib/gst/report-periods";
 import { formatMoney } from "@/lib/properties/payment-calculations";
-import type { GstReportBreakdown, GstReportResult } from "@/lib/gst/reports";
+import type { GstReportBreakdown, GstReportPaymentRow, GstReportPaymentSummary, GstReportResult } from "@/lib/gst/reports";
 
 type PeriodMode = "monthly" | "quarterly" | "yearly" | "custom";
 
@@ -177,6 +177,101 @@ function BreakdownTable({
             ))}
           </tbody>
         </table>
+      </div>
+    </section>
+  );
+}
+
+function PaymentBreakupTable({
+  title,
+  rows,
+  total,
+  emptyMessage = "No payments in this period.",
+}: {
+  title: string;
+  rows: GstReportPaymentRow[];
+  total: number;
+  emptyMessage?: string;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+      <h3 className="text-base font-semibold text-white">{title}</h3>
+      <div className="mt-4 overflow-x-auto rounded-xl border border-slate-800">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-950 text-left text-slate-400">
+            <tr>
+              <th className="px-4 py-3">Name</th>
+              <th className="px-4 py-3 text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={2} className="px-4 py-6 text-center text-slate-500">
+                  {emptyMessage}
+                </td>
+              </tr>
+            ) : (
+              rows.map((row) => (
+                <tr key={row.key} className="border-t border-slate-800">
+                  <td className="px-4 py-3 text-slate-200">{row.label}</td>
+                  <td className="px-4 py-3 text-right text-slate-100">{formatMoney(row.amount)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+          <tfoot className="border-t border-slate-700 bg-slate-950/60">
+            <tr>
+              <td className="px-4 py-3 font-semibold text-emerald-200">Total</td>
+              <td className="px-4 py-3 text-right text-lg font-semibold text-emerald-100">
+                {formatMoney(total)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function PaymentSummarySection({
+  title,
+  subtitle,
+  summary,
+  showInvoiceTypeBreakup,
+}: {
+  title: string;
+  subtitle: string;
+  summary: GstReportPaymentSummary;
+  showInvoiceTypeBreakup?: boolean;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold text-white">{title}</h2>
+        <p className="mt-1 text-sm text-slate-400">{subtitle}</p>
+        <p className="mt-1 text-xs text-slate-500">
+          {summary.paymentCount} payment(s) · Total {formatMoney(summary.totalPaid)}
+        </p>
+      </div>
+      <div className={`grid gap-6 ${showInvoiceTypeBreakup ? "lg:grid-cols-3" : "lg:grid-cols-2"}`}>
+        {showInvoiceTypeBreakup ? (
+          <PaymentBreakupTable
+            title="By invoice type"
+            rows={summary.byInvoiceType}
+            total={summary.totalPaid}
+          />
+        ) : null}
+        <PaymentBreakupTable
+          title="By account"
+          rows={summary.byAccountName}
+          total={summary.totalPaid}
+        />
+        <PaymentBreakupTable
+          title="By payment mode"
+          rows={summary.byMode}
+          total={summary.totalPaid}
+        />
       </div>
     </section>
   );
@@ -436,6 +531,19 @@ export function GstReportAdmin() {
           </div>
 
           <BreakdownTable title="Total Purchase" breakdown={report.purchase} />
+
+          <PaymentSummarySection
+            title="Sales payments"
+            subtitle="Amount received against B2B and B2C invoices (by payment date in this period)"
+            summary={report.salesPayments}
+            showInvoiceTypeBreakup
+          />
+
+          <PaymentSummarySection
+            title="Purchase payments"
+            subtitle="Amount paid against purchase invoices (by payment date in this period)"
+            summary={report.purchasePayments}
+          />
         </div>
       ) : null}
     </div>

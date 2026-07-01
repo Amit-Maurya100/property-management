@@ -287,11 +287,17 @@ export async function deleteGstInvoice(userId: bigint, id: IdInput) {
 
   const existing = await prisma.gstInvoice.findFirst({
     where: { id: invoiceId, organizationId: organization.id },
-    select: { id: true },
+    select: { id: true, paymentStatus: true },
   });
   if (!existing) throw new Error("NOT_FOUND");
+  if (existing.paymentStatus === "PAID") {
+    throw new Error("BAD_REQUEST:Paid invoices cannot be deleted");
+  }
 
-  await prisma.gstInvoice.delete({ where: { id: invoiceId } });
+  await prisma.$transaction(async (tx) => {
+    await tx.gstPayment.deleteMany({ where: { gstInvoiceId: invoiceId } });
+    await tx.gstInvoice.delete({ where: { id: invoiceId } });
+  });
 }
 
 export async function fileGstInvoicesForMonth(

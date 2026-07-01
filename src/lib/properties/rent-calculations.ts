@@ -58,6 +58,11 @@ export function calcDefaultRentPeriodStart(params: {
   return "";
 }
 
+/** True when today (local calendar) is on or after the rent due date. */
+export function isRentDueForReminder(dueDateIso: string, today = new Date()) {
+  return dueDateIso.slice(0, 10) <= formatIsoDate(today);
+}
+
 /** Due date = period start (From) plus configured days from tenant. */
 export function calcDueDateFromPeriodStart(fromDateIso: string, daysAfterStart: number) {
   const from = parseIsoDateLocal(fromDateIso);
